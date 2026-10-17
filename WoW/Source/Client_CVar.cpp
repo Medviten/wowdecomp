@@ -635,7 +635,7 @@ bool LocaleCallback(CVar* var, const char* oldValue, const char* value, void* ar
     return true;
 }
 
-// Custom: Cataclysm-style altered forms. alteredFormRaces lists "race=alteredRace" pairs (e.g. "22=1" or "22=1,23=2"),
+// Custom: Cataclysm-style altered forms. alteredFormRaces lists "race=alteredRace" pairs (e.g. "22=23" (retail Worgen = Gilnean)),
 // standing in for Cata's ChrRaces.m_alteredFormRaceID. Such a race's second form is drawn as a real character of the
 // altered race with the same customization choices (in game when its display is the altered race's own model, and
 // in the barber shop and character creation previews).
@@ -687,7 +687,7 @@ uint32_t ClientGetAlteredFormRace(uint32_t race) {
 }
 
 // Custom: shapeshiftSkinColorRaces lists the races whose shapeshift form models follow skin (fur) color rather than
-// hair color in player_shapeshift_model (e.g. "6,16,21,22,23": Tauren, Highmountain Tauren, Vulpera, Pandaren),
+// hair color in player_shapeshift_model (retail IDs "6,24,25,26,28,35": Tauren, Pandaren, Highmountain Tauren, Vulpera),
 // matching the server's rule
 static bool s_shapeshiftSkinColorRace[256];
 

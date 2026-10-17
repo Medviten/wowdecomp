@@ -7198,9 +7198,11 @@ int32_t CGUnit_C::CanEquipItemsInThisForm() const {
     return unit->m_unitFieldNativedisplayid == unit->m_unitFieldDisplayid;
 }
 
-// Custom: see Unit_C.h. The altered race's own male/female character display (ChrRaces) marks the altered form.
+// Custom: see Unit_C.h. Any display using the altered race's character model (the model of its ChrRaces male/female
+// display) marks the altered form, so a transform aura into e.g. a human NPC creature counts too; the client then
+// builds the player's own character of that race instead of the NPC's fixed look.
 bool CGUnit_C::IsInAlteredForm() const {
-    if (!(this->m_obj->m_type & TYPEMASK_PLAYER) || this->m_displayInfoExtra) {
+    if (!(this->m_obj->m_type & TYPEMASK_PLAYER)) {
         return false;
     }
 
@@ -7217,7 +7219,19 @@ bool CGUnit_C::IsInAlteredForm() const {
         displayId = this->m_unit->m_unitFieldDisplayid;
     }
 
-    return displayId && (displayId == alteredRec->m_maleDisplayID || displayId == alteredRec->m_femaleDisplayID);
+    if (!displayId || displayId == static_cast<int32_t>(this->m_unit->m_unitFieldNativedisplayid)) {
+        return false;
+    }
+
+    if (displayId == alteredRec->m_maleDisplayID || displayId == alteredRec->m_femaleDisplayID) {
+        return true;
+    }
+
+    CreatureDisplayInfoRec* displayRec = g_creatureDisplayInfoDB.GetRecord(displayId);
+    CreatureDisplayInfoRec* maleRec = g_creatureDisplayInfoDB.GetRecord(alteredRec->m_maleDisplayID);
+    CreatureDisplayInfoRec* femaleRec = g_creatureDisplayInfoDB.GetRecord(alteredRec->m_femaleDisplayID);
+
+    return displayRec && ((maleRec && displayRec->m_modelID == maleRec->m_modelID) || (femaleRec && displayRec->m_modelID == femaleRec->m_modelID));
 }
 
 // VERIFY: 8b19ad28 manual
@@ -13941,7 +13955,11 @@ int32_t CGUnit_C::InitializeComponent() {
         return 0;
     }
 
-    if (this->HasBakedNpcTexture()) {
+    // Custom: the altered form (alteredFormRaces) is built from the player's own choices as the altered race, even when
+    // the transform's display is an NPC one with fixed (baked) looks
+    if (this->IsInAlteredForm()) {
+        this->InitializeExtendedDisplay(static_cast<CGPlayer_C*>(this), 0);
+    } else if (this->HasBakedNpcTexture()) {
         this->InitializeExtendedDisplay(static_cast<CGPlayer_C*>(this), 1);
     } else if (this->m_displayInfoExtra) {
         int32_t result = this->InitializeExtendedDisplay(nullptr, 1);

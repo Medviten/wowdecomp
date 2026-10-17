@@ -1710,11 +1710,12 @@ bool InitializeGlobal() {
     CVar::Register("useEnglishAudio", "override the locale and use English audio", 0, "0", nullptr, CATEGORY_DEFAULT, false, nullptr, false);
 
     // Custom: Cataclysm-style altered forms (see ClientGetAlteredFormRace)
-    CVar* alteredForms = CVar::Register("alteredFormRaces", "Races with a second form drawn as another race, e.g. \"22=1\"", 0, "", AlteredFormRacesCallback, CATEGORY_DEFAULT, false, nullptr, false);
+    // Custom: defaults use retail race IDs (22 Worgen, 23 Gilnean)
+    CVar* alteredForms = CVar::Register("alteredFormRaces", "Races with a second form drawn as another race, e.g. \"22=23\" (Worgen = Gilnean)", 0, "22=23", AlteredFormRacesCallback, CATEGORY_DEFAULT, false, nullptr, false);
     AlteredFormRacesCallback(alteredForms, nullptr, alteredForms->m_stringValue.m_str, nullptr);
 
     // Custom: character creation druid form preview (see DruidForms_CharacterCreate.lua)
-    CVar* skinColorRaces = CVar::Register("shapeshiftSkinColorRaces", "Races whose shapeshift models follow skin (fur) color, not hair color", 0, "6,16,21,22,23", ShapeshiftSkinColorRacesCallback, CATEGORY_DEFAULT, false, nullptr, false);
+    CVar* skinColorRaces = CVar::Register("shapeshiftSkinColorRaces", "Races whose shapeshift models follow skin (fur) color, not hair color (retail IDs: Tauren, Pandaren, Highmountain Tauren, Vulpera)", 0, "6,24,25,26,28,35", ShapeshiftSkinColorRacesCallback, CATEGORY_DEFAULT, false, nullptr, false);
     ShapeshiftSkinColorRacesCallback(skinColorRaces, nullptr, skinColorRaces->m_stringValue.m_str, nullptr);
     CVar::Register("druidFormPreview", "Show the druid form preview in character creation", 0, "1", nullptr, CATEGORY_DEFAULT, false, nullptr, false);
 
