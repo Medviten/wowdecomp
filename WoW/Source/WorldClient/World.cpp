@@ -1327,6 +1327,11 @@ float World::ValidateFarClip(float farClip, int32_t mapID) {
         maxFarClip = 2375.0f / 3.0f;
     }
 
+    // Custom: farClipLimit above 0 replaces the stock caps (~791, or ~1583 with farClipOverride)
+    if (CWorldParam::cvar_farClipLimit && CWorldParam::cvar_farClipLimit->m_floatValue > 0.0f) {
+        maxFarClip = CWorldParam::cvar_farClipLimit->m_floatValue;
+    }
+
     if (farClip < 550.0f / 3.0f) {
         return 550.0f / 3.0f;
     }
@@ -3536,6 +3541,11 @@ void CWorldScene::RenderDetailDoodads() {
     int32_t shaders = CDetailDoodad::InitializeRenderState();
     C44Matrix world;
 
+    // Custom: grass wind samples the clock and the player once per frame
+    CGPlayer_C* windPlayer = static_cast<CGPlayer_C*>(ClntObjMgrObjectPtr(ClntObjMgrGetActivePlayer(), TYPEMASK_PLAYER, __FILE__, __LINE__));
+    C3Vector windPlayerPosition = windPlayer ? windPlayer->GetPosition() : C3Vector();
+    CDetailDoodad::BeginWindFrame(windPlayer ? &windPlayerPosition : nullptr);
+
     CDetailDoodadInst* next;
 
     for (CDetailDoodadInst* inst = CWorldScene::sortTable.m_detailDoodadInstList.Head(); inst; inst = next) {
@@ -3562,6 +3572,8 @@ void CWorldScene::RenderDetailDoodads() {
             stack.m_mtx[stack.m_level] = world;
         }
 
+        // Custom: grass wind needs the world origin the batch vertices are relative to
+        CDetailDoodad::SetWindChunk(chunk->m_topLeftCoords);
         inst->DrawBatches();
         inst->m_link.Unlink();
         CMap::s_detailDoodadUpdateList.LinkToTail(inst);

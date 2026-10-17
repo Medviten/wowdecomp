@@ -19,6 +19,7 @@
 #include "WoW/Source/Magic/MagicClient/Spell_C.h"
 #include "Engine/Source/Model2/M2Model.h"
 #include "WoW/Source/Net/Types.h"
+#include "WoW/Source/Ui/DressUpModelFrame.h"
 
 // STATIC: 0x00BD19B8
 uint8_t CGBarberShop::m_barberShopEnabled;
@@ -46,6 +47,36 @@ STYLEREC* CGBarberShop::m_currentFacialHair;
 
 // STATIC: 0x00BD19B4
 STYLEREC* CGBarberShop::m_currentSkinColor;
+
+// Custom: see BarberShop.h
+CGDressUpModelFrame* CGBarberShop::m_alternateFormFrame;
+
+// Custom: flags the frame as the other-form preview and (re)builds it for the player; the frame picks the other race
+// and the barber shop dressing itself (see CGDressUpModelFrame::SetModel)
+void CGBarberShop::SetAlternateForm() {
+    CGDressUpModelFrame* frame = CGBarberShop::m_alternateFormFrame;
+
+    if (!frame) {
+        return;
+    }
+
+    frame->m_barberShopAlternateForm = 1;
+    frame->RefreshUnit(ClntObjMgrGetActivePlayer());
+}
+
+// Custom: copies the choices being previewed on the player onto the other-form preview
+void CGBarberShop::UpdateAlternateForm() {
+    CGDressUpModelFrame* frame = CGBarberShop::m_alternateFormFrame;
+    CGPlayer_C* player = ClntObjMgrGetActivePlayerObj();
+
+    if (!frame || !frame->m_component || !player || !player->m_characterComponent) {
+        return;
+    }
+
+    player->m_characterComponent->CopyChoicesToComponent(frame->m_component, COMPONENT_CONTEXT_1);
+    frame->m_component->m_data.m_model->IsDrawable(1, 1);
+    frame->m_component->RenderPrep(1);
+}
 
 // STATIC: 0x00BD19C4
 TSHashTable<USEABLESTYLE, HASHKEY_NONE> CGBarberShop::m_useableStyles;
@@ -202,6 +233,8 @@ int32_t Packet_SMSG_ENABLE_BARBER_SHOP(void* param, NETMESSAGE msgId, uint32_t t
     CGBarberShop::m_currentFacialHair = CGBarberShop::GetStyle(2, player->m_unit->m_unitFieldBytes0[0], player->m_player->m_playerBytes3[0], player->m_player->m_playerBytes2[0]);
     CGBarberShop::m_currentSkinColor = CGBarberShop::GetStyle(3, player->m_unit->m_unitFieldBytes0[0], player->m_player->m_playerBytes3[0], component->m_data.m_preferences.m_skinID);
     CGBarberShop::m_barberShopEnabled = 1;
+    // Custom: rebuild the other-form preview now the barber shop dressing applies
+    CGBarberShop::SetAlternateForm();
     FrameScript_SignalEvent(SCRIPT_EVENT_BARBER_SHOP_OPEN, nullptr);
     CGBarberShop::m_minCameraDistance = 1.0f;
     M2SequenceInfo info;
@@ -253,15 +286,32 @@ void CGBarberShop::SetNextBarberShopStyle(int32_t type, bool backward) {
         return;
     }
 
+    // Custom: the style lists are built for the player's race, but in an altered form (alteredFormRaces) the component
+    // being cycled is the altered race, whose options may not line up. Keep cycling until the choice also exists for the
+    // player's race (the first step always does with normal data), so GetStyle never yields null; if nothing fits,
+    // put the previous choice back.
+    int32_t race = player->m_unit->m_unitFieldBytes0[0];
+    int32_t sex = player->m_unit->m_unitFieldBytes0[2];
+    STYLEREC* style = nullptr;
+
     switch (type) {
         case 0:
-            if (!backward) {
-                component->SetNextHairStyle(COMPONENT_CONTEXT_1);
-            } else {
-                component->SetPrevHairStyle(COMPONENT_CONTEXT_1);
+            for (int32_t attempt = 0; attempt < 64 && !style; attempt++) {
+                if (!backward) {
+                    component->SetNextHairStyle(COMPONENT_CONTEXT_1);
+                } else {
+                    component->SetPrevHairStyle(COMPONENT_CONTEXT_1);
+                }
+
+                style = CGBarberShop::GetStyle(0, race, sex, component->m_data.m_preferences.m_hairStyleId);
             }
 
-            CGBarberShop::m_currentHairStyle = CGBarberShop::GetStyle(0, player->m_unit->m_unitFieldBytes0[0], player->m_unit->m_unitFieldBytes0[2], component->m_data.m_preferences.m_hairStyleId);
+            if (style) {
+                CGBarberShop::m_currentHairStyle = style;
+            } else if (CGBarberShop::m_currentHairStyle) {
+                component->SetHairStyle(CGBarberShop::m_currentHairStyle->m_rec->m_data, nullptr);
+            }
+
             break;
         case 1:
             if (!backward) {
@@ -272,22 +322,40 @@ void CGBarberShop::SetNextBarberShopStyle(int32_t type, bool backward) {
 
             break;
         case 2:
-            if (!backward) {
-                component->SetNextFacialFeature(COMPONENT_CONTEXT_1);
-            } else {
-                component->SetPrevFacialFeature(COMPONENT_CONTEXT_1);
+            for (int32_t attempt = 0; attempt < 64 && !style; attempt++) {
+                if (!backward) {
+                    component->SetNextFacialFeature(COMPONENT_CONTEXT_1);
+                } else {
+                    component->SetPrevFacialFeature(COMPONENT_CONTEXT_1);
+                }
+
+                style = CGBarberShop::GetStyle(2, race, sex, component->m_data.m_preferences.m_facialHairId);
             }
 
-            CGBarberShop::m_currentFacialHair = CGBarberShop::GetStyle(2, player->m_unit->m_unitFieldBytes0[0], player->m_unit->m_unitFieldBytes0[2], component->m_data.m_preferences.m_facialHairId);
+            if (style) {
+                CGBarberShop::m_currentFacialHair = style;
+            } else if (CGBarberShop::m_currentFacialHair) {
+                component->SetBeardStyle(CGBarberShop::m_currentFacialHair->m_rec->m_data, true, nullptr);
+            }
+
             break;
         case 3:
-            if (!backward) {
-                component->SetNextSkin(COMPONENT_CONTEXT_1);
-            } else {
-                component->SetPrevSkin(COMPONENT_CONTEXT_1);
+            for (int32_t attempt = 0; attempt < 64 && !style; attempt++) {
+                if (!backward) {
+                    component->SetNextSkin(COMPONENT_CONTEXT_1);
+                } else {
+                    component->SetPrevSkin(COMPONENT_CONTEXT_1);
+                }
+
+                style = CGBarberShop::GetStyle(3, race, sex, component->m_data.m_preferences.m_skinID);
             }
 
-            CGBarberShop::m_currentSkinColor = CGBarberShop::GetStyle(3, player->m_unit->m_unitFieldBytes0[0], player->m_unit->m_unitFieldBytes0[2], component->m_data.m_preferences.m_skinID);
+            if (style) {
+                CGBarberShop::m_currentSkinColor = style;
+            } else if (CGBarberShop::m_currentSkinColor) {
+                component->SetSkinColor(CGBarberShop::m_currentSkinColor->m_rec->m_data, true, true, nullptr);
+            }
+
             break;
         default:
             break;
@@ -295,6 +363,7 @@ void CGBarberShop::SetNextBarberShopStyle(int32_t type, bool backward) {
 
     component->m_data.m_model->IsDrawable(1, 1);
     component->RenderPrep(1);
+    CGBarberShop::UpdateAlternateForm();
 }
 
 // VERIFY: 1a363132 auto
@@ -380,6 +449,8 @@ void CGBarberShop::ResetAppearance() {
     component->SetBeardStyle(player->m_player->m_playerBytes2[0], true, nullptr);
     component->SetSkinColor(player->m_player->m_playerBytes[0], true, true, nullptr);
     component->m_data.m_model->IsDrawable(1, 1);
+    // Custom: keep the other-form preview in step
+    CGBarberShop::UpdateAlternateForm();
 }
 
 // VERIFY: fb38ad28 manual
@@ -430,7 +501,8 @@ void CGBarberShop::DisableBarberShop() {
     player->ChangeStandState(0);
     CCharacterComponent* component = player->m_characterComponent;
 
-    if (!component || player->m_unit->m_unitFieldDisplayid != player->m_unit->m_unitFieldNativedisplayid) {
+    // Custom: the altered form (alteredFormRaces) is restored like the native form
+    if (!component || (player->m_unit->m_unitFieldDisplayid != player->m_unit->m_unitFieldNativedisplayid && !player->IsInAlteredForm())) {
         return;
     }
 
@@ -561,6 +633,7 @@ void CGBarberShop::ApplyAppearanceChange() {
 // OFFSET: 0x0052F060
 void CGBarberShop::ShutdownGame() {
     CGBarberShop::m_initialized = 0;
+    CGBarberShop::m_alternateFormFrame = nullptr;
     CGBarberShop::m_useableStyles.InternalClear(0);
     ClientServices::ClearMessageHandler(SMSG_ENABLE_BARBER_SHOP);
     ClientServices::ClearMessageHandler(SMSG_BARBER_SHOP_RESULT);

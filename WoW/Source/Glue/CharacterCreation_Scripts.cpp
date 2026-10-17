@@ -14,6 +14,16 @@
 #include "WoW/Source/DB/Rec/ChrRacesRec.h"
 #include "WoW/Source/DB/Rec/FactionGroupRec.h"
 #include "WoW/Source/DB/Rec/FactionTemplateRec.h"
+#include "WoW/Source/DB/Rec/SpellShapeshiftFormRec.h"
+#include "WoW/Source/Client.h"
+#include "WoW/Source/DB/Rec/CreatureDisplayInfoRec.h"
+#include "WoW/Source/DB/Rec/CreatureModelDataRec.h"
+#include "Engine/Source/Base/Handle.h"
+#include "Engine/Source/Model2/M2Model.h"
+#include "Engine/Source/Model2/M2Scene.h"
+#include "Engine/Source/Services/Camera.h"
+#include "Engine/Source/Tempest/CAaSphere.h"
+#include <cstdlib>
 #include "WoW/Source/Glue/CharacterSelection.h"
 #include "WoW/Source/Glue/CSimpleModelFFX.h"
 #include "WoW/Source/Object/ObjectClient/Unit_C.h"
@@ -118,6 +128,273 @@ static int32_t Script_IsRaceClassRestricted(lua_State* L) {
 // OFFSET: 0x004DFC90
 static int32_t Script_UpdateCustomizationScene(lua_State* L) {
     CCharacterCreation::m_character->RenderPrep(0);
+
+    // Custom: altered form preview
+    if (CCharacterCreation::m_alteredCharacter) {
+        CCharacterCreation::m_alteredCharacter->RenderPrep(0);
+    }
+
+    return 0;
+}
+
+// Custom: AzerothCore's world.player_shapeshift_model, shipped client-side as DBFilesClient\PlayerShapeshiftModel.csv
+// (lines "ShapeshiftID,RaceID,CustomizationID,GenderID,ModelID"; anything not starting with a digit is skipped), so
+// character creation can preview druid forms the way the server will show them
+struct ShapeshiftModelRow {
+    int32_t m_form;
+    int32_t m_race;
+    int32_t m_customization;
+    int32_t m_gender;
+    int32_t m_model;
+};
+
+static TSGrowableArray<ShapeshiftModelRow> s_shapeshiftModels;
+static bool s_shapeshiftModelsLoaded;
+
+static void LoadShapeshiftModels() {
+    if (s_shapeshiftModelsLoaded) {
+        return;
+    }
+
+    s_shapeshiftModelsLoaded = true;
+
+    char* data;
+    uint32_t size;
+
+    if (!SFile::LoadFile("DBFilesClient\\PlayerShapeshiftModel.csv", reinterpret_cast<void**>(&data), &size, 1, nullptr) || !data) {
+        return;
+    }
+
+    const char* line = data;
+
+    while (*line) {
+        const char* end = line;
+
+        while (*end && *end != '\n') {
+            end++;
+        }
+
+        // Values may be quoted ("1","4","0","2","29407", as MySQL tools export them); the header line isn't numeric
+        const char* first = line;
+
+        while (first < end && (*first == '"' || *first == '\'' || *first == ' ' || *first == '\t')) {
+            first++;
+        }
+
+        if (first < end && *first >= '0' && *first <= '9') {
+            int32_t values[5];
+            uint32_t count = 0;
+            const char* cursor = first;
+
+            while (count < 5 && cursor < end) {
+                char* next;
+                long value = strtol(cursor, &next, 10);
+
+                if (next == cursor) {
+                    cursor++;
+                    continue;
+                }
+
+                values[count++] = static_cast<int32_t>(value);
+                cursor = next;
+            }
+
+            if (count == 5) {
+                ShapeshiftModelRow* row = s_shapeshiftModels.New();
+                row->m_form = values[0];
+                row->m_race = values[1];
+                row->m_customization = values[2];
+                row->m_gender = values[3];
+                row->m_model = values[4];
+            }
+        }
+
+        line = *end ? end + 1 : end;
+    }
+
+    SFile::Unload(data);
+}
+
+static int32_t FindShapeshiftModel(int32_t form, int32_t race, int32_t customization, int32_t gender) {
+    for (uint32_t i = 0; i < s_shapeshiftModels.Count(); i++) {
+        const ShapeshiftModelRow& row = s_shapeshiftModels[i];
+
+        // A row whose display the client doesn't have (e.g. one only in the server's DBC tables) can't be shown, so
+        // it is skipped and the lookup falls through to the next, more general row or the DBC default
+        if (row.m_form == form && row.m_race == race && row.m_customization == customization && row.m_gender == gender && g_creatureDisplayInfoDB.GetRecord(row.m_model)) {
+            return row.m_model;
+        }
+    }
+
+    return 0;
+}
+
+static bool IsHordeRace(int32_t race) {
+    ChrRacesRec* raceRec = g_chrRacesDB.GetRecord(race);
+    FactionTemplateRec* factionTemplate = raceRec ? g_factionTemplateDB.GetRecord(raceRec->m_factionID) : nullptr;
+
+    if (!factionTemplate) {
+        return false;
+    }
+
+    for (int32_t i = 0; i < g_factionGroupDB.m_numRecords; i++) {
+        FactionGroupRec* group = &g_factionGroupDB.m_records[i];
+
+        if (group->m_maskID && ((1 << group->m_maskID) & factionTemplate->m_factionGroup) && !SStrCmpI(group->m_internalName, "Horde", STORM_MAX_STR)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// Mirrors AzerothCore's Unit::GetModelForForm / ObjectMgr::GetModelForShapeshift (as patched on this server): the table
+// keyed by skin (fur) color for the races in shapeshiftSkinColorRaces and hair color for everyone else, with 255 = any
+// customization and gender 2 = either, then SpellShapeshiftForm.dbc's Alliance/Horde model by faction
+static int32_t GetShapeshiftDisplay(int32_t form, const CharacterPreferences& prefs) {
+    LoadShapeshiftModels();
+
+    bool horde = IsHordeRace(prefs.m_raceID);
+    int32_t customization = ClientShapeshiftUsesSkinColor(prefs.m_raceID) ? prefs.m_skinID : prefs.m_hairColorId;
+    int32_t race = prefs.m_raceID;
+    int32_t gender = prefs.m_sexID;
+    int32_t model;
+
+    if ((model = FindShapeshiftModel(form, race, customization, gender)) || (model = FindShapeshiftModel(form, race, customization, 2)) || (model = FindShapeshiftModel(form, race, 255, gender)) || (model = FindShapeshiftModel(form, race, 255, 2))) {
+        return model;
+    }
+
+    SpellShapeshiftFormRec* formRec = g_spellShapeshiftFormDB.GetRecord(form);
+
+    if (!formRec) {
+        return 0;
+    }
+
+    model = horde ? formRec->m_creatureDisplayID[1] : formRec->m_creatureDisplayID[0];
+    return model ? model : formRec->m_creatureDisplayID[0];
+}
+
+// Custom: SetModelCreatureDisplay("frameName", displayID) shows a creature display (model plus its skins) in a Model
+// frame, lit by the frame's own light and framed whole by a camera aimed at its bounding sphere; 0 clears the frame.
+// Used by the druid form preview. (A plain Model frame draws only in its own rectangle; a ModelFFX would clear the
+// whole screen.)
+static int32_t Script_SetModelCreatureDisplay(lua_State* L) {
+    if (!lua_isstring(L, 1) || !lua_isnumber(L, 2)) {
+        luaL_error(L, "Usage: SetModelCreatureDisplay(\"frameName\", displayID)");
+        return 0;
+    }
+
+    CSimpleModel* frame = static_cast<CSimpleModel*>(CScriptObject::GetScriptObjectByName(lua_tolstring(L, 1, nullptr), CSimpleModel::GetObjectType()));
+
+    if (!frame) {
+        luaL_error(L, "SetModelCreatureDisplay: '%s' is not a Model frame", lua_tolstring(L, 1, nullptr));
+        return 0;
+    }
+
+    int32_t displayId = lua_tointeger(L, 2);
+    CreatureDisplayInfoRec* displayRec = displayId > 0 ? g_creatureDisplayInfoDB.GetRecord(displayId) : nullptr;
+    CreatureModelDataRec* modelRec = displayRec ? g_creatureModelDataDB.GetRecord(displayRec->m_modelID) : nullptr;
+
+    if (!modelRec || !modelRec->m_modelName || !*modelRec->m_modelName) {
+        frame->SetModel(static_cast<CM2Model*>(nullptr));
+        return 0;
+    }
+
+    CM2Model* model = frame->GetScene()->CreateModel(modelRec->m_modelName, 0);
+
+    if (!model) {
+        return 0;
+    }
+
+    if (!(model->m_fFlags & 0x1)) {
+        model->WaitForLoad(nullptr);
+    }
+
+    CCharacterComponent::ReplaceMonsterSkin(model, displayRec, modelRec);
+
+    frame->m_light.SetLightType(M2LIGHT_DIRECT);
+    frame->m_light.m_dirColor = C3Vector(0.8f, 0.8f, 0.64f);
+    frame->m_light.m_ambColor = C3Vector(0.7f, 0.7f, 0.7f);
+    frame->m_light.SetDirection(C3Vector(0.0f, 1.0f, 0.0f));
+    frame->m_light.SetVisible(1);
+
+    frame->SetModel(model);
+    model->SetBoneSequence(0xFFFFFFFF, 0, 0xFFFFFFFF, 0, 1.0f, 1, 1);
+
+    // Like CGCharacterModelBase::ConfigureCamera's fallback, scaled to the model: about 3.4 radii in front, a little above (closer than the paperdoll framing, so the form fills the preview)
+    CAaSphere sphere = model->GetBoundingSphere();
+    float radius = sphere.r > 0.1f ? sphere.r : 1.0f;
+    CCamera* camera = CameraCreate();
+    CameraSetFloat(camera, 4, 0.5f);
+    CameraSetCoord(camera, 8, sphere.c, 0);
+    CameraSetCoord(camera, 7, C3Vector(sphere.c.x + radius * 3.4f, sphere.c.y, sphere.c.z + radius * 0.9f), 0);
+    CameraSetFloat(camera, 3, 0.027777778f);
+    frame->SetCamera(camera);
+    HandleClose(reinterpret_cast<HOBJECT>(camera));
+
+    model->Release();
+    return 0;
+}
+
+// Custom: displayID, formName = GetCharCustomizeShapeshiftDisplay(form) for the character being created
+static int32_t Script_GetCharCustomizeShapeshiftDisplay(lua_State* L) {
+    if (!lua_isnumber(L, 1)) {
+        luaL_error(L, "Usage: GetCharCustomizeShapeshiftDisplay(form)");
+        return 0;
+    }
+
+    int32_t form = lua_tointeger(L, 1);
+
+    if (!CCharacterCreation::m_character) {
+        lua_pushnumber(L, 0.0);
+        lua_pushnil(L);
+        return 2;
+    }
+
+    SpellShapeshiftFormRec* formRec = g_spellShapeshiftFormDB.GetRecord(form);
+    lua_pushnumber(L, GetShapeshiftDisplay(form, CCharacterCreation::m_character->m_data.m_preferences));
+
+    if (formRec && formRec->m_name) {
+        lua_pushstring(L, formRec->m_name);
+    } else {
+        lua_pushnil(L);
+    }
+
+    return 2;
+}
+
+// Custom: Cataclysm-style altered form preview (alteredFormRaces): HasAlteredForm(), IsViewingAlteredForm(),
+// SetViewingAlteredForm(bool)
+// Custom: name, fileString = GetAlteredFormRace() for the selected race's altered form (nil when it has none), like
+// GetNameForRace for the race itself
+static int32_t Script_GetAlteredFormRace(lua_State* L) {
+    uint32_t altered = CCharacterCreation::m_character ? ClientGetAlteredFormRace(CCharacterCreation::m_character->m_data.m_preferences.m_raceID) : 0;
+    ChrRacesRec* raceRec = altered ? g_chrRacesDB.GetRecord(altered) : nullptr;
+    const char* name = raceRec ? CGUnit_C::GetDisplayRaceNameFromRecord(raceRec, CCharacterCreation::m_character->m_data.m_preferences.m_sexID, nullptr) : nullptr;
+
+    if (raceRec && name) {
+        lua_pushstring(L, name);
+        lua_pushstring(L, raceRec->m_clientFileString);
+        return 2;
+    }
+
+    lua_pushnil(L);
+    lua_pushnil(L);
+    return 2;
+}
+
+static int32_t Script_HasAlteredForm(lua_State* L) {
+    lua_pushboolean(L, CCharacterCreation::m_alteredCharacter != nullptr);
+    return 1;
+}
+
+static int32_t Script_IsViewingAlteredForm(lua_State* L) {
+    lua_pushboolean(L, CCharacterCreation::m_alteredCharacter ? CCharacterCreation::m_alteredFormAtFront : 0);
+    return 1;
+}
+
+static int32_t Script_SetViewingAlteredForm(lua_State* L) {
+    CCharacterCreation::SetViewingAlteredForm(lua_toboolean(L, 1));
     return 0;
 }
 
@@ -582,6 +859,12 @@ static FrameScript_Method s_scriptFunctions[] = {
     { "SetSelectedClass", &Script_SetSelectedClass },
     { "UpdateCustomizationBackground", &Script_UpdateCustomizationBackground },
     { "UpdateCustomizationScene", &Script_UpdateCustomizationScene },
+    { "HasAlteredForm", &Script_HasAlteredForm },
+    { "GetAlteredFormRace", &Script_GetAlteredFormRace },
+    { "GetCharCustomizeShapeshiftDisplay", &Script_GetCharCustomizeShapeshiftDisplay },
+    { "SetModelCreatureDisplay", &Script_SetModelCreatureDisplay },
+    { "IsViewingAlteredForm", &Script_IsViewingAlteredForm },
+    { "SetViewingAlteredForm", &Script_SetViewingAlteredForm },
     { "CycleCharCustomization", &Script_CycleCharCustomization },
     { "RandomizeCharCustomization", &Script_RandomizeCharCustomization },
     { "GetCharacterCreateFacing", &Script_GetCharacterCreateFacing },

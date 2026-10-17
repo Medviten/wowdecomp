@@ -1175,6 +1175,23 @@ int32_t CM2Shared::InitializeSkinProfile() {
         memset(this->m_effects, 0, sizeof(CShaderEffect*) * this->m_skinData->m_batches.m_count);
     }
 
+    // Custom: sanitize malformed batches (seen in custom models) before anything indexes the material table with them:
+    // a batch whose material is out of range is hidden (shader 0x8000 is skipped when drawing) and pointed at material
+    // 0, and a materialLayer reaching before the first batch is cleared, so no lookup can run outside the arrays.
+    // Valid batches are untouched.
+    for (uint32_t i = 0; i < this->m_skinData->m_batches.m_count; i++) {
+        M2Batch* batch = &this->m_skinData->m_batches[i];
+
+        if (batch->m_materialIndex >= this->m_data->m_materials.m_count) {
+            batch->m_materialIndex = 0;
+            batch->m_shader = 0x8000;
+        }
+
+        if (batch->m_materialLayer > i) {
+            batch->m_materialLayer = 0;
+        }
+    }
+
     this->SubstituteSimpleShaders();
     this->SubstituteSpecializedShaders();
 

@@ -24,7 +24,8 @@ bool CGGameObject_C_Type_BarberChair::CanUseNow(GAME_ERROR_TYPE* error, float* d
 
     CGPlayer_C* player = ClntObjMgrGetActivePlayerObj();
 
-    if (player->m_unit->m_unitFieldDisplayid == player->m_unit->m_unitFieldNativedisplayid && !player->IsShapeShifted()) {
+    // Custom: also allowed in an altered form (alteredFormRaces), which is a full character the barber shop can edit
+    if ((player->m_unit->m_unitFieldDisplayid == player->m_unit->m_unitFieldNativedisplayid || player->IsInAlteredForm()) && !player->IsShapeShifted()) {
         return true;
     }
 

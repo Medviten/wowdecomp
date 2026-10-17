@@ -2262,6 +2262,15 @@ void DayNight::UpdateFog() {
             DayNight::s_lightFlags &= ~1;
         }
     }
+
+    // Custom: disableFog pushes the distance fog band past anything drawn, so it never blends in. Underwater fog is
+    // left alone, since water without it looks wrong.
+    if (CWorldParam::cvar_disableFog && CWorldParam::cvar_disableFog->m_intValue && !liquidStatus) {
+        info.m_fog.m_start = 90000.0f;
+        info.m_fog.m_end = 100000.0f;
+        info.m_fogInterior.m_start = 90000.0f;
+        info.m_fogInterior.m_end = 100000.0f;
+    }
 }
 
 // VERIFY: cb3314a8 manual

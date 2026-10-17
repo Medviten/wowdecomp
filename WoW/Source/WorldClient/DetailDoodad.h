@@ -49,6 +49,12 @@ class CDetailDoodad {
     static void SetupVertexShader(const C44Matrix& world, uint32_t index);
     static void UpdateAlphaRampTexture(EGxTexCommand command, uint32_t width, uint32_t height, uint32_t face, uint32_t level, void* userArg, uint32_t& texelStrideInBytes, const void*& texels);
     static void UpdatePools();
+
+    // Custom: grass wind. BeginWindFrame samples the grassWind CVars, the clock and the player once per frame;
+    // SetWindChunk gives the origin the next batches' vertices are relative to.
+    static void BeginWindFrame(const C3Vector* playerPosition);
+    static void SetWindChunk(const C3Vector& chunkOrigin);
+    static bool WindActive();
 };
 
 struct CDetailDoodad::SShaderConstants {

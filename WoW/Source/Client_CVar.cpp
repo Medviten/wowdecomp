@@ -635,6 +635,90 @@ bool LocaleCallback(CVar* var, const char* oldValue, const char* value, void* ar
     return true;
 }
 
+// Custom: Cataclysm-style altered forms. alteredFormRaces lists "race=alteredRace" pairs (e.g. "22=1" or "22=1,23=2"),
+// standing in for Cata's ChrRaces.m_alteredFormRaceID. Such a race's second form is drawn as a real character of the
+// altered race with the same customization choices (in game when its display is the altered race's own model, and
+// in the barber shop and character creation previews).
+static uint8_t s_alteredFormRace[256];
+
+bool AlteredFormRacesCallback(CVar* var, const char* oldValue, const char* value, void* arg) {
+    memset(s_alteredFormRace, 0, sizeof(s_alteredFormRace));
+
+    const char* cursor = value ? value : "";
+
+    while (*cursor) {
+        char* end;
+        long race = strtol(cursor, &end, 10);
+
+        if (end == cursor) {
+            cursor++;
+            continue;
+        }
+
+        cursor = end;
+
+        while (*cursor == ' ') {
+            cursor++;
+        }
+
+        if (*cursor != '=') {
+            continue;
+        }
+
+        cursor++;
+        long altered = strtol(cursor, &end, 10);
+
+        if (end == cursor) {
+            continue;
+        }
+
+        cursor = end;
+
+        if (race > 0 && race < 256 && altered > 0 && altered < 256 && race != altered) {
+            s_alteredFormRace[race] = static_cast<uint8_t>(altered);
+        }
+    }
+
+    return true;
+}
+
+uint32_t ClientGetAlteredFormRace(uint32_t race) {
+    return race < sizeof(s_alteredFormRace) ? s_alteredFormRace[race] : 0;
+}
+
+// Custom: shapeshiftSkinColorRaces lists the races whose shapeshift form models follow skin (fur) color rather than
+// hair color in player_shapeshift_model (e.g. "6,16,21,22,23": Tauren, Highmountain Tauren, Vulpera, Pandaren),
+// matching the server's rule
+static bool s_shapeshiftSkinColorRace[256];
+
+bool ShapeshiftSkinColorRacesCallback(CVar* var, const char* oldValue, const char* value, void* arg) {
+    memset(s_shapeshiftSkinColorRace, 0, sizeof(s_shapeshiftSkinColorRace));
+
+    const char* cursor = value ? value : "";
+
+    while (*cursor) {
+        char* end;
+        long race = strtol(cursor, &end, 10);
+
+        if (end == cursor) {
+            cursor++;
+            continue;
+        }
+
+        cursor = end;
+
+        if (race > 0 && race < 256) {
+            s_shapeshiftSkinColorRace[race] = true;
+        }
+    }
+
+    return true;
+}
+
+bool ClientShapeshiftUsesSkinColor(uint32_t race) {
+    return race < sizeof(s_shapeshiftSkinColorRace) && s_shapeshiftSkinColorRace[race];
+}
+
 // VERIFY: 9951b118 manual
 // OFFSET: 0x00401B60
 void ClientRegisterConsoleCommands() {

@@ -9,6 +9,26 @@
 #include "WoW/Source/Ui/BarberShop.h"
 #include "WoW/Source/Ui/WorldFrame.h"
 
+// Custom: cameraZoomAcceleration. With a value above 0, a zoom step moves at least that fraction of the current camera
+// distance, and takes as long as the stock step would, so zooming stays quick far out. Returns the duration to pass to
+// ZoomIn/ZoomOut (0 = stock timing from cameraDistanceMoveSpeed).
+static float AccelerateZoomStep(CGCamera* camera, double& distance) {
+    float acceleration = s_cvCameraZoomAcceleration ? s_cvCameraZoomAcceleration->m_floatValue : 0.0f;
+
+    if (acceleration <= 0.0f || CGBarberShop::m_barberShopEnabled || distance <= 0.0) {
+        return 0.0f;
+    }
+
+    float duration = static_cast<float>(distance) / s_cvCameraDistanceMoveSpeed->m_floatValue;
+    double scaled = camera->m_smoothDistance.m_target * acceleration;
+
+    if (scaled > distance) {
+        distance = scaled;
+    }
+
+    return duration;
+}
+
 // VERIFY: 60071b01 auto
 // OFFSET: 0x006017E0
 static int32_t Script_CameraZoomIn(lua_State* L) {
@@ -19,7 +39,9 @@ static int32_t Script_CameraZoomIn(lua_State* L) {
         distance *= 0.2f;
     }
 
-    CGWorldFrame::GetActiveCamera()->ZoomIn(static_cast<float>(distance), time, 0.0f);
+    CGCamera* camera = CGWorldFrame::GetActiveCamera();
+    float duration = AccelerateZoomStep(camera, distance);
+    camera->ZoomIn(static_cast<float>(distance), time, duration);
     return 0;
 }
 
@@ -33,7 +55,9 @@ static int32_t Script_CameraZoomOut(lua_State* L) {
         distance *= 0.2f;
     }
 
-    CGWorldFrame::GetActiveCamera()->ZoomOut(static_cast<float>(distance), time, 0.0f);
+    CGCamera* camera = CGWorldFrame::GetActiveCamera();
+    float duration = AccelerateZoomStep(camera, distance);
+    camera->ZoomOut(static_cast<float>(distance), time, duration);
     return 0;
 }
 

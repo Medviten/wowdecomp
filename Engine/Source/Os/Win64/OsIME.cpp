@@ -59,10 +59,12 @@ static int32_t GetCompositionString(DWORD index, char* buffer, uint32_t bufferSi
         return 0;
     }
 
+    // Custom: read the composition as UTF-16. The original used ImmGetCompositionStringA and the ANSI code page, which
+    // turns every character outside that code page into '?' (e.g. Chinese typed on a Western-locale Windows).
     uint16_t wide[512];
-    uint32_t written;
-    ImmGetCompositionStringA(context, index, buffer, bufferSize);
-    MultiByteToWideChar(GetACP(), MB_PRECOMPOSED, buffer, -1, reinterpret_cast<LPWSTR>(wide), 512);
+    uint32_t written = 0;
+    LONG bytes = ImmGetCompositionStringW(context, index, wide, sizeof(wide) - sizeof(wide[0]));
+    wide[bytes > 0 ? bytes / sizeof(wide[0]) : 0] = 0;
     ConvertUTF16toUTF8(buffer, bufferSize - 1, wide, 512, &written, nullptr);
     buffer[written] = '\0';
 
@@ -82,17 +84,17 @@ int32_t OsIMEGetCompositionResult(char* buffer, uint32_t bufferSize) {
 
 // OFFSET: 0x0086CDB0
 int32_t OsIMEGetClauseInfo(uint32_t& clauseStart, uint32_t& clauseEnd, uint32_t& cursor) {
-    UINT codePage = GetACP();
-
     HWND window = static_cast<HWND>(OsGuiGetWindow(0));
     HIMC context = ImmGetContext(window);
     if (!context) {
         return 0;
     }
 
-    uint32_t cursorPos = ImmGetCompositionStringA(context, GCS_CURSORPOS, nullptr, 0) & 0xFFFF;
+    // Custom: the W functions report the cursor, clause offsets and attributes in UTF-16 units, which is what the
+    // callers expect, so no ANSI code page conversion (which broke on characters outside that code page) is needed.
+    uint32_t cursorPos = ImmGetCompositionStringW(context, GCS_CURSORPOS, nullptr, 0) & 0xFFFF;
 
-    uint32_t clauseSize = ImmGetCompositionStringA(context, GCS_COMPCLAUSE, nullptr, 0);
+    uint32_t clauseSize = ImmGetCompositionStringW(context, GCS_COMPCLAUSE, nullptr, 0);
     if (clauseSize <= 4) {
         ImmReleaseContext(window, context);
         return 0;
@@ -101,7 +103,7 @@ int32_t OsIMEGetClauseInfo(uint32_t& clauseStart, uint32_t& clauseEnd, uint32_t&
     DWORD* clauses = static_cast<DWORD*>(_alloca(clauseSize));
     memset(clauses, 0, clauseSize);
 
-    clauseSize = ImmGetCompositionStringA(context, GCS_COMPCLAUSE, clauses, clauseSize);
+    clauseSize = ImmGetCompositionStringW(context, GCS_COMPCLAUSE, clauses, clauseSize);
 
     uint32_t clause = 0;
 
@@ -122,27 +124,20 @@ int32_t OsIMEGetClauseInfo(uint32_t& clauseStart, uint32_t& clauseEnd, uint32_t&
     }
 
     char attributes[512];
-    ImmGetCompositionStringA(context, GCS_COMPATTR, attributes, sizeof(attributes));
+    memset(attributes, 0, sizeof(attributes));
+    ImmGetCompositionStringW(context, GCS_COMPATTR, attributes, sizeof(attributes));
 
     for (uint32_t i = 0; i < clauseCount - 1; i++) {
-        if (attributes[clauses[i]] == ATTR_INPUT) {
+        if (clauses[i] < sizeof(attributes) && attributes[clauses[i]] == ATTR_INPUT) {
             clause = i;
         }
     }
 
-    char composition[512];
-    memset(composition, 0, sizeof(composition));
-    ImmGetCompositionStringA(context, GCS_COMPSTR, composition, sizeof(composition));
-
     ImmReleaseContext(window, context);
 
-    int32_t cursorWide = MultiByteToWideChar(codePage, MB_PRECOMPOSED, composition, cursorPos, nullptr, 0);
-    int32_t startWide = MultiByteToWideChar(codePage, MB_PRECOMPOSED, composition, clauses[clause], nullptr, 0);
-    int32_t lengthWide = MultiByteToWideChar(codePage, MB_PRECOMPOSED, composition, clauses[clause + 1] - clauses[clause], nullptr, 0);
-
-    clauseStart = startWide;
-    clauseEnd = startWide + lengthWide;
-    cursor = cursorWide;
+    clauseStart = clauses[clause];
+    clauseEnd = clauses[clause + 1];
+    cursor = cursorPos;
 
     return 1;
 }
@@ -228,7 +223,8 @@ int32_t OsIMEGetCandidates(uint32_t listMask, uint32_t& pageStart, uint32_t& pag
         index++;
     }
 
-    DWORD listSize = ImmGetCandidateListA(context, index, nullptr, 0);
+    // Custom: UTF-16 candidate list, so candidates outside the ANSI code page don't show as '?'
+    DWORD listSize = ImmGetCandidateListW(context, index, nullptr, 0);
     if (!listSize) {
         ImmReleaseContext(window, context);
         return 0;
@@ -236,7 +232,7 @@ int32_t OsIMEGetCandidates(uint32_t listMask, uint32_t& pageStart, uint32_t& pag
 
     int32_t changed = 0;
     CANDIDATELIST* list = static_cast<CANDIDATELIST*>(SMemAlloc(listSize, __FILE__, __LINE__, 0));
-    ImmGetCandidateListA(context, index, list, listSize);
+    ImmGetCandidateListW(context, index, list, listSize);
 
     if (!list->dwPageSize) {
         ImmNotifyIME(context, NI_SETCANDIDATE_PAGESIZE, index, 9);
@@ -273,9 +269,8 @@ int32_t OsIMEGetCandidates(uint32_t listMask, uint32_t& pageStart, uint32_t& pag
         uint32_t written = 0;
 
         if (candidateIndex < list->dwCount) {
-            uint16_t wide[512];
-            MultiByteToWideChar(GetACP(), MB_PRECOMPOSED, reinterpret_cast<char*>(list) + list->dwOffset[candidateIndex], -1, reinterpret_cast<LPWSTR>(wide), 512);
-            ConvertUTF16toUTF8(candidate->m_text, sizeof(candidate->m_text) - 1, wide, 512, &written, nullptr);
+            const uint16_t* wide = reinterpret_cast<const uint16_t*>(reinterpret_cast<char*>(list) + list->dwOffset[candidateIndex]);
+            ConvertUTF16toUTF8(candidate->m_text, sizeof(candidate->m_text) - 1, wide, STORM_MAX_STR, &written, nullptr);
         }
 
         candidate->m_text[written] = '\0';

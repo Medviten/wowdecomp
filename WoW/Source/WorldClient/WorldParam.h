@@ -31,6 +31,15 @@ class CWorldParam {
     static CVar* cvar_groundEffectDist;
     static CVar* cvar_terrainAlphaBitDepth;
     static CVar* cvar_farClipOverride;
+    // Custom: farClipLimit (view distance cap, 0 = stock) and disableFog
+    static CVar* cvar_farClipLimit;
+    static CVar* cvar_disableFog;
+    // Custom: grass wind (see CDetailDoodad wind)
+    static CVar* cvar_grassWind;
+    static CVar* cvar_grassWindStrength;
+    static CVar* cvar_grassWindSpeed;
+    static CVar* cvar_grassWindDirection;
+    static CVar* cvar_grassParting;
     static CVar* cvar_objectFade;
     static CVar* cvar_objectFadeZFill;
     static CVar* cvar_environmentDetail;

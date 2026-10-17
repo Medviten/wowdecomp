@@ -27,6 +27,11 @@ CVar* s_cvCameraDistanceMaxFactor;
 // STATIC: 0x00C2498C
 CVar* s_cvCameraDistanceMax;
 
+// Custom: zoom options (cameraZoomLimit, cameraZoomAcceleration) and close-camera fade toggle (cameraCharacterFade)
+CVar* s_cvCameraZoomLimit;
+CVar* s_cvCameraZoomAcceleration;
+CVar* s_cvCameraCharacterFade;
+
 // STATIC: 0x00C24990
 CVar* s_cvCameraSubmergeFinalPitch;
 
@@ -355,11 +360,42 @@ static bool ValidateCameraView(CVar* var, const char* oldValue, const char* valu
 static bool ValidateCameraDistance(CVar* var, const char* oldValue, const char* value, void* arg) {
     float distance = SStrToFloat(value);
 
-    if (distance >= 0.0f && distance <= 50.0f) {
+    // Custom: was 0-50. The real ceiling is now cameraZoomLimit, applied where the distance is used, so this only
+    // rejects nonsense (checking against cameraZoomLimit here would depend on which CVar Config.wtf loads first)
+    if (distance >= 0.0f && distance <= 100000.0f) {
         return true;
     }
 
-    ConsoleWriteA("Value out of range (%f - %f)\n", DEFAULT_COLOR, 0.0, 50.0);
+    ConsoleWriteA("Value out of range (%f - %f)\n", DEFAULT_COLOR, 0.0, 100000.0);
+    return false;
+}
+
+// Custom: cameraDistanceMoveSpeed/SmoothSpeed allowed up to 10000 yd/s (was 50), so zooming can be effectively instant
+static bool ValidateCameraDistanceSpeed(CVar* var, const char* oldValue, const char* value, void* arg) {
+    float speed = SStrToFloat(value);
+
+    if (speed >= 0.0027777778f && speed <= 10000.0f) {
+        return true;
+    }
+
+    ConsoleWriteA("Value out of range (%f - %f)\n", DEFAULT_COLOR, 0.0027777778f, 10000.0f);
+    return false;
+}
+
+// Custom: the player camera's zoom-out ceiling, replacing the stock hard-coded 50 yards
+float CameraGetZoomLimit() {
+    return s_cvCameraZoomLimit ? s_cvCameraZoomLimit->m_floatValue : 50.0f;
+}
+
+// Custom: cameraZoomLimit, the most the player camera can zoom out (stock hard-coded 50)
+static bool ValidateCameraZoomLimit(CVar* var, const char* oldValue, const char* value, void* arg) {
+    float limit = SStrToFloat(value);
+
+    if (limit >= 1.0f && limit <= 100000.0f) {
+        return true;
+    }
+
+    ConsoleWriteA("Value out of range (%f - %f)\n", DEFAULT_COLOR, 1.0, 100000.0);
     return false;
 }
 
@@ -458,12 +494,12 @@ void CameraRegisterCVars() {
     s_cameraBobHorizontalAmplitude = 2.0f;
     s_cameraBobVerticalAmplitude = 2.0f;
     s_cameraBobFrequency = 0.8f;
-    s_cvCameraDistanceMoveSpeed = CVar::Register("cameraDistanceMoveSpeed", nullptr, 0x10, "8.33", ValidateCameraLinearSpeed, CATEGORY_DEFAULT, false, nullptr, false);
+    s_cvCameraDistanceMoveSpeed = CVar::Register("cameraDistanceMoveSpeed", nullptr, 0x10, "8.33", ValidateCameraDistanceSpeed, CATEGORY_DEFAULT, false, nullptr, false);
     s_cvCameraPitchMoveSpeed = CVar::Register("cameraPitchMoveSpeed", nullptr, 0x10, "90", ValidateCameraAngularSpeed, CATEGORY_DEFAULT, false, nullptr, false);
     s_cvCameraYawMoveSpeed = CVar::Register("cameraYawMoveSpeed", nullptr, 0x10, "180", ValidateCameraAngularSpeed, CATEGORY_DEFAULT, false, nullptr, false);
     s_cvCameraBobbingSmoothSpeed = CVar::Register("cameraBobbingSmoothSpeed", nullptr, 0x10, "0.8", ValidateCameraLinearSpeed, CATEGORY_DEFAULT, false, nullptr, false);
     s_cvCameraFoVSmoothSpeed = CVar::Register("cameraFoVSmoothSpeed", nullptr, 0x10, "0.5", ValidateCameraAngularSpeed, CATEGORY_DEFAULT, false, nullptr, false);
-    s_cvCameraDistanceSmoothSpeed = CVar::Register("cameraDistanceSmoothSpeed", nullptr, 0x10, "8.33", ValidateCameraLinearSpeed, CATEGORY_DEFAULT, false, nullptr, false);
+    s_cvCameraDistanceSmoothSpeed = CVar::Register("cameraDistanceSmoothSpeed", nullptr, 0x10, "8.33", ValidateCameraDistanceSpeed, CATEGORY_DEFAULT, false, nullptr, false);
     s_cvCameraGroundSmoothSpeed = CVar::Register("cameraGroundSmoothSpeed", nullptr, 0x10, "7.5", ValidateCameraAngularSpeed, CATEGORY_DEFAULT, false, nullptr, false);
     s_cvCameraHeightSmoothSpeed = CVar::Register("cameraHeightSmoothSpeed", nullptr, 0x10, "1.2", ValidateCameraLinearSpeed, CATEGORY_DEFAULT, false, nullptr, false);
     s_cvCameraPitchSmoothSpeed = CVar::Register("cameraPitchSmoothSpeed", nullptr, 0x10, "45", ValidateCameraAngularSpeed, CATEGORY_DEFAULT, false, nullptr, false);
@@ -542,6 +578,10 @@ void CameraRegisterCVars() {
     s_cvCameraSubmergeFinalPitch = CVar::Register("cameraSubmergeFinalPitch", nullptr, 0x10, "5.0", ValidateCameraPitch, CATEGORY_DEFAULT, false, nullptr, false);
     s_cvCameraDistanceMax = CVar::Register("cameraDistanceMax", nullptr, 0x10, "15.0", ValidateCameraDistance, CATEGORY_DEFAULT, false, nullptr, false);
     s_cvCameraDistanceMaxFactor = CVar::Register("cameraDistanceMaxFactor", nullptr, 0x10, "1.0", nullptr, CATEGORY_DEFAULT, false, nullptr, false);
+    // Custom: zoom options; the defaults keep stock behavior
+    s_cvCameraZoomLimit = CVar::Register("cameraZoomLimit", "Most the camera can zoom out, in yards (stock 50)", 0x10, "50", ValidateCameraZoomLimit, CATEGORY_DEFAULT, false, nullptr, false);
+    s_cvCameraCharacterFade = CVar::Register("cameraCharacterFade", "Fade characters as the camera closes in (0 = stay opaque)", 0x10, "1", nullptr, CATEGORY_DEFAULT, false, nullptr, false);
+    s_cvCameraZoomAcceleration = CVar::Register("cameraZoomAcceleration", "Fraction of the current distance each zoom step moves at least (0 = stock)", 0x10, "0", nullptr, CATEGORY_DEFAULT, false, nullptr, false);
     s_cvCameraPitchSmoothMin = CVar::Register("cameraPitchSmoothMin", nullptr, 0x10, "0.0", ValidateCameraPitch, CATEGORY_DEFAULT, false, nullptr, false);
     s_cvCameraPitchSmoothMax = CVar::Register("cameraPitchSmoothMax", nullptr, 0x10, "30.0", ValidateCameraPitch, CATEGORY_DEFAULT, false, nullptr, false);
     s_cvCameraYawSmoothMin = CVar::Register("cameraYawSmoothMin", nullptr, 0x10, "0.0", ValidateCameraYaw, CATEGORY_DEFAULT, false, nullptr, false);

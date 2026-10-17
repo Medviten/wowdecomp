@@ -10,6 +10,7 @@
 struct lua_State;
 
 class CDataStore;
+class CGDressUpModelFrame;
 
 int32_t Packet_SMSG_ENABLE_BARBER_SHOP(void* param, NETMESSAGE msgId, uint32_t time, CDataStore* msg);
 int32_t Packet_SMSG_BARBER_SHOP_RESULT(void* param, NETMESSAGE msgId, uint32_t time, CDataStore* msg);
@@ -43,6 +44,12 @@ class CGBarberShop {
     static void ShutdownGame();
     static void RegisterScriptFunctions();
     static void UnregisterScriptFunctions();
+
+    // Custom: Cataclysm-style second preview of the player's other form (alteredFormRaces), shown in a DressUpModel
+    // frame the UI hands over with SetBarberShopAlternateFormFrame
+    static CGDressUpModelFrame* m_alternateFormFrame;
+    static void SetAlternateForm();
+    static void UpdateAlternateForm();
 };
 
 #endif

@@ -10,6 +10,9 @@
 #include "WoW/Source/Object/ObjectClient/Player_C.h"
 #include "WoW/Source/Object/Unit.h"
 #include "WoW/Source/ObjectMgrClient/ObjectMgrClient.h"
+#include "WoW/Source/Client.h"
+#include "WoW/Source/Ui/DressUpModelFrame.h"
+#include "Engine/Source/Frame/CScriptObject.h"
 
 // VERIFY: 350bfeb0 auto
 // OFFSET: 0x0052E4F0
@@ -127,7 +130,38 @@ static int32_t Script_GetFacialHairCustomization(lua_State* L) {
 }
 
 // STATIC: 0x00ACC790
+// Custom: SetBarberShopAlternateFormFrame("frameName") hands over a DressUpModel frame to show the player's other form
+// (alteredFormRaces), like Cataclysm's Worgen/Human barber shop preview
+static int32_t Script_SetBarberShopAlternateFormFrame(lua_State* L) {
+    if (!lua_isstring(L, 1)) {
+        luaL_error(L, "Usage: SetBarberShopAlternateFormFrame(\"frameName\")");
+        return 0;
+    }
+
+    CGDressUpModelFrame* frame = static_cast<CGDressUpModelFrame*>(CScriptObject::GetScriptObjectByName(lua_tolstring(L, 1, nullptr), CGDressUpModelFrame::GetObjectType()));
+
+    if (!frame) {
+        luaL_error(L, "SetBarberShopAlternateFormFrame: '%s' is not a DressUpModel frame", lua_tolstring(L, 1, nullptr));
+        return 0;
+    }
+
+    CGBarberShop::m_alternateFormFrame = frame;
+    CGBarberShop::SetAlternateForm();
+    return 0;
+}
+
+// Custom: hasAlternateForm, inAlteredForm = HasAlternateForm(), like Cataclysm
+static int32_t Script_HasAlternateForm(lua_State* L) {
+    CGPlayer_C* player = ClntObjMgrGetActivePlayerObj();
+    bool has = player && ClientGetAlteredFormRace(player->m_unit->m_unitFieldBytes0[0]) != 0;
+    lua_pushboolean(L, has);
+    lua_pushboolean(L, has && player->IsInAlteredForm());
+    return 2;
+}
+
 static FrameScript_Method s_ScriptFunctions[] = {
+    { "SetBarberShopAlternateFormFrame", &Script_SetBarberShopAlternateFormFrame },
+    { "HasAlternateForm", &Script_HasAlternateForm },
     { "GetBarberShopStyleInfo", &Script_GetBarberShopStyleInfo },
     { "SetNextBarberShopStyle", &Script_SetNextBarberShopStyle },
     { "GetBarberShopTotalCost", &Script_GetBarberShopTotalCost },
@@ -150,6 +184,9 @@ void CGBarberShop::RegisterScriptFunctions() {
 // VERIFY: 86a5e76c auto
 // OFFSET: 0x0052E550
 void CGBarberShop::UnregisterScriptFunctions() {
+    // Custom: the UI (and the frame) is going away
+    CGBarberShop::m_alternateFormFrame = nullptr;
+
     for (uint32_t i = 0; i < sizeof(s_ScriptFunctions) / sizeof(s_ScriptFunctions[0]); i++) {
         FrameScript_UnregisterFunction(s_ScriptFunctions[i].m_name);
     }

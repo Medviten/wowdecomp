@@ -1837,9 +1837,27 @@ int32_t CM2Scene::Animate(const C3Vector& cameraPos) {
                 continue;
             }
 
+            // Custom: skip a batch whose material is outside the model's material table (malformed custom models)
+            if (batch->m_materialIndex >= data->m_materials.m_count) {
+                continue;
+            }
+
             M2Material* material = &data->m_materials[batch->m_materialIndex];
             int32_t projected = (batch->m_flags & 4) && this->m_projectTextureCallback;
-            M2Material* baseMaterial = batch->m_materialLayer ? &data->m_materials[batch->m_materialIndex - batch->m_materialLayer] : material;
+
+            // Custom: a layered batch's base material is the material of its base batch, materialLayer batches earlier
+            // (as M2Shared's skin setup pairs them), not materialIndex - materialLayer. The two agree for Blizzard's
+            // models, whose layers use consecutive materials; for others the subtraction ran outside the material table.
+            // Out-of-range data falls back to the batch's own material.
+            M2Material* baseMaterial = material;
+
+            if (batch->m_materialLayer && i >= batch->m_materialLayer) {
+                const M2Batch* baseBatch = batch - batch->m_materialLayer;
+
+                if (baseBatch->m_materialIndex < data->m_materials.m_count) {
+                    baseMaterial = &data->m_materials[baseBatch->m_materialIndex];
+                }
+            }
             int32_t transparent = baseMaterial->m_blendMode > 1 || alpha < 0.99998999f;
             CShaderEffect* effect = optimized ? model->m_optGeo->m_effects[i] : model->m_shared->m_effects[i];
 

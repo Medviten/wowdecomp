@@ -639,8 +639,9 @@ bool CGCalendarEvent::Invite(const char* name) {
         return false;
     }
 
+    // Custom: character names are case-sensitive, so send the name exactly as typed instead of FixCharacterNameCase
     char fixedName[48];
-    FixCharacterNameCase(fixedName, name, sizeof(fixedName));
+    SStrCopy(fixedName, name, sizeof(fixedName));
 
     for (uint32_t i = 0; i < this->m_numInvites; i++) {
         WOWGUID key = WOWGUID();

@@ -233,7 +233,9 @@ static C3Vector s_occlusionVolumeVerts61[4] = { C3Vector(-475.600006f, 2173.8000
 
 // STATIC: 0x00AF0040
 static OcclusionVolume s_occlusionVolumes[62] = {
-    { 0, 0, { CAaBox(C3Vector(0.0f, 0.0f, 0.0f), C3Vector(0.0f, 0.0f, 0.0f)), s_occlusionVolumeVerts0, 4 } },
+    // Custom: map 0 -> -1 disables the hard-coded Stormwind gate wall (-8814,474 to -8986,679), which culls the
+    // city behind it and breaks with remade Stormwind geometry (e.g. Open Azeroth). No map has ID -1.
+    { -1, 0, { CAaBox(C3Vector(0.0f, 0.0f, 0.0f), C3Vector(0.0f, 0.0f, 0.0f)), s_occlusionVolumeVerts0, 4 } },
     { 571, 0, { CAaBox(C3Vector(0.0f, 0.0f, 0.0f), C3Vector(0.0f, 0.0f, 0.0f)), s_occlusionVolumeVerts1, 8 } },
     { 571, 2, { CAaBox(C3Vector(0.0f, 0.0f, 0.0f), C3Vector(0.0f, 0.0f, 0.0f)), s_occlusionVolumeVerts2, 6 } },
     { 571, 0, { CAaBox(C3Vector(0.0f, 0.0f, 0.0f), C3Vector(0.0f, 0.0f, 0.0f)), s_occlusionVolumeVerts3, 4 } },

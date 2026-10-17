@@ -29,12 +29,10 @@ int32_t RealmConnection::HandleCharEnum(uint32_t msgId, uint32_t time, CDataStor
     uint8_t count;
     msg->Get(count);
 
+    // Custom: the original rejected the whole list above 10 characters. Every consumer
+    // (m_characterList, CCharacterSelection::s_characterList, the glue scripts) is sized by Count(),
+    // so any count the uint8_t field can carry is fine.
     int32_t invalid = 0;
-
-    if (count > 10) {
-        count = 0;
-        invalid = 1;
-    }
 
     this->m_characterList.Clear();
     this->m_characterList.SetCount(count);

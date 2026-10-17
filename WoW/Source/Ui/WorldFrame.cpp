@@ -918,6 +918,12 @@ void CGWorldFrame::SetPlayerFadeCameraValue(uint8_t value) {
         }
     }
 
+    // Custom: cameraCharacterFade 0 keeps characters opaque as the camera closes in, and only hides them once the camera
+    // is inside the model (value 0), so first person doesn't show the inside of your character
+    if (s_cvCameraCharacterFade && !s_cvCameraCharacterFade->m_intValue && value) {
+        value = 0xFF;
+    }
+
     unit->SetMaxAlpha(value * (1.0f / 255.0f));
 }
 

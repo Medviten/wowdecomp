@@ -1758,7 +1758,8 @@ int32_t CGCamera::IsViewDefault(uint32_t view) {
 // OFFSET: 0x005FF3E0
 void CGCamera::LoadCameraSettings() {
     float distance = s_cvCameraSavedDistance->m_floatValue;
-    distance = 0.0f > distance ? 0.0f : (50.0f <= distance ? 50.0f : distance);
+    // Custom: ceiling is cameraZoomLimit instead of a hard-coded 50
+    distance = 0.0f > distance ? 0.0f : (CameraGetZoomLimit() <= distance ? CameraGetZoomLimit() : distance);
     this->m_distance = distance;
     this->m_smoothDistance.m_target = distance;
 
@@ -2020,7 +2021,8 @@ void CGCamera::SetVehicleZoomEnabled(int32_t enabled, float duration, int32_t an
         }
     } else {
         distance = s_cvCameraSavedDistance->m_floatValue;
-        distance = distance < 0.0f ? 0.0f : (distance >= 50.0f ? 50.0f : distance);
+        // Custom: ceiling is cameraZoomLimit instead of a hard-coded 50
+        distance = distance < 0.0f ? 0.0f : (distance >= CameraGetZoomLimit() ? CameraGetZoomLimit() : distance);
     }
 
     if (animate && fabsf(distance - this->m_distance) >= 0.001f) {
@@ -2864,10 +2866,11 @@ void CGCamera::UpdateMotion(uint32_t time) {
     } else {
         maxDistance = s_cvCameraDistanceMaxFactor->m_floatValue * s_cvCameraDistanceMax->m_floatValue;
 
+        // Custom: ceiling is cameraZoomLimit instead of a hard-coded 50
         if (maxDistance < 0.0f) {
             maxDistance = 0.0f;
-        } else if (50.0f <= maxDistance) {
-            maxDistance = 50.0f;
+        } else if (CameraGetZoomLimit() <= maxDistance) {
+            maxDistance = CameraGetZoomLimit();
         }
     }
 
@@ -4234,10 +4237,11 @@ void CGCamera::CommentatorSetViewAndPosition(const C3Vector& position, float fac
 void CGCamera::RestoreSavedDistancePitch() {
     float distance = s_cvCameraSavedDistance->m_floatValue;
 
+    // Custom: ceiling is cameraZoomLimit instead of a hard-coded 50
     if (distance < 0.0f) {
         distance = 0.0f;
-    } else if (distance >= 50.0f) {
-        distance = 50.0f;
+    } else if (distance >= CameraGetZoomLimit()) {
+        distance = CameraGetZoomLimit();
     }
 
     this->m_distance = distance;

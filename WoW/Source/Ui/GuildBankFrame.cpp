@@ -7,6 +7,7 @@
 #include "Engine/Source/Base/CDataStore.h"
 #include "WoW/Source/Game/ValidateName.h"
 #include "WoW/Source/DB/DBClient/DBCacheInstances.h"
+#include "WoW/Source/DB/DBClient/DBClient.h"
 #include "WoW/Source/ObjectMgrClient/ObjectMgrClient.h"
 #include "WoW/Source/Object/ObjectClient/Player_C.h"
 #include <ctime>
@@ -688,11 +689,16 @@ int32_t Packet_SMSG_GUILD_BANK_LIST(void* param, NETMESSAGE msgId, uint32_t time
     msg->Get(CGGuildBankInfo::m_withdrawMoneyRemaining);
     msg->Get(hasTabInfo);
 
+    // Custom: the tab comes from the server and indexes m_tabSlots[6]; drop a malformed packet instead of writing past it
+    if (tab >= sizeof(CGGuildBankInfo::m_tabSlots) / sizeof(CGGuildBankInfo::m_tabSlots[0])) {
+        return 0;
+    }
+
     if (s_pendingItemQueries) {
         s_pendingItemQueries = 0;
 
         for (uint32_t i = 0; i < CGGuildBankInfo::m_tabSlots[tab].m_count; i++) {
-            g_nameDBCache.CancelCallback(*reinterpret_cast<uint64_t*>(&CGGuildBankInfo::m_tabSlots[tab].m_data[i]), Signal_EVENT_GUILDBANKBAGSLOTS_CHANGED, nullptr);
+            g_itemDBCache.CancelCallback(CGGuildBankInfo::m_tabSlots[tab].m_data[i].m_itemID, Signal_EVENT_GUILDBANKBAGSLOTS_CHANGED, nullptr);
         }
     }
 
@@ -744,6 +750,11 @@ int32_t Packet_SMSG_GUILD_BANK_LIST(void* param, NETMESSAGE msgId, uint32_t time
         uint8_t slotIndex;
         msg->Get(slotIndex);
 
+        // Custom: a tab has 98 slots; stop parsing a malformed packet instead of writing past the slot array
+        if (slotIndex >= CGGuildBankInfo::m_tabSlots[tab].m_count) {
+            break;
+        }
+
         if (cursorId && tab == static_cast<uint32_t>(cursorSlot) / 98 && slotIndex == static_cast<uint32_t>(cursorSlot) % 98) {
             CGGameUI::ClearCursor(1, 1);
             CGGameUI::UnlockVirtualItem(cursorId, cursorSlot, 0);
@@ -768,7 +779,14 @@ int32_t Packet_SMSG_GUILD_BANK_LIST(void* param, NETMESSAGE msgId, uint32_t time
 
         msg->Get(reinterpret_cast<uint32_t&>(CGGuildBankInfo::m_tabSlots[tab].m_data[slotIndex].m_count));
         msg->Get(CGGuildBankInfo::m_tabSlots[tab].m_data[slotIndex].m_enchantId);
-        msg->Get(CGGuildBankInfo::m_tabSlots[tab].m_data[slotIndex].m_spellCharges);
+
+        // SMSG_GUILD_BANK_LIST stores spell charges as a single byte.  Reading
+        // the field directly into the 32-bit member consumes the following
+        // enchant-count byte and the first bytes of the next slot, which
+        // desynchronizes the packet after the first item.
+        uint8_t spellCharges;
+        msg->Get(spellCharges);
+        CGGuildBankInfo::m_tabSlots[tab].m_data[slotIndex].m_spellCharges = spellCharges;
         uint8_t numEnchants;
         msg->Get(numEnchants);
         slot = &CGGuildBankInfo::m_tabSlots[tab].m_data[slotIndex];
@@ -778,13 +796,35 @@ int32_t Packet_SMSG_GUILD_BANK_LIST(void* param, NETMESSAGE msgId, uint32_t time
 
         for (uint32_t j = 0; j < numEnchants; j++) {
             uint8_t enchantSlot;
+            uint32_t enchantId;
             msg->Get(enchantSlot);
-            msg->Get(CGGuildBankInfo::m_tabSlots[tab].m_data[slotIndex].m_enchants[enchantSlot]);
+            msg->Get(enchantId);
+
+            // Custom: servers send socket indexes 0-2; ignore anything else instead of writing past m_enchants[3]
+            if (enchantSlot < sizeof(slot->m_enchants) / sizeof(slot->m_enchants[0])) {
+                CGGuildBankInfo::m_tabSlots[tab].m_data[slotIndex].m_enchants[enchantSlot] = enchantId;
+            }
         }
 
         CGGuildBankInfo::m_tabSlots[tab].m_data[slotIndex].m_locked = 0;
 
-        if (!g_itemDBCache.GetRecord(CGGuildBankInfo::m_tabSlots[tab].m_data[slotIndex].m_itemID, playerGuid, Signal_EVENT_GUILDBANKBAGSLOTS_CHANGED, nullptr, false)) {
+        int32_t itemId = CGGuildBankInfo::m_tabSlots[tab].m_data[slotIndex].m_itemID;
+        ItemRec* localItem = g_itemDB.GetRecord(itemId);
+        ItemDisplayInfoRec localDisplay;
+        bool hasLocalItemDisplay = localItem && localItem->m_displayInfoID && g_itemDisplayInfoDB.GetRecord(localItem->m_displayInfoID, &localDisplay);
+        ItemStats_C* cachedStats = g_itemDBCache.GetRecord(itemId, playerGuid, Signal_EVENT_GUILDBANKBAGSLOTS_CHANGED, nullptr, false);
+
+        // A stale itemcache.wdb entry with no display ID prevents DBCache from
+        // querying the server again. Drop that entry and issue a fresh query.
+        if (cachedStats && !cachedStats->m_displayId) {
+            g_itemDBCache.Invalidate(itemId);
+            cachedStats = g_itemDBCache.GetRecord(itemId, playerGuid, Signal_EVENT_GUILDBANKBAGSLOTS_CHANGED, nullptr, false);
+        }
+
+        if (!cachedStats && !hasLocalItemDisplay) {
+            // Wait for the asynchronous cache query whenever the local DBC
+            // cannot provide a valid icon. This also covers stale local
+            // records whose display ID is zero or missing from ItemDisplayInfo.
             s_pendingItemQueries++;
         }
     }

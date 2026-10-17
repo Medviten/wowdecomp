@@ -191,6 +191,7 @@ class CCharacterComponent {
     void GeosRenderPrep();
     int32_t GetHelmModelFilePath(ItemDisplayInfoRec& rec, const ItemDisplayInfoRec*& displayRec);
     void GetPreferences(CharacterPreferences* preferences);
+    void CopyChoicesToComponent(CCharacterComponent* other, COMPONENT_CONTEXT context);
     int32_t GetQuiverModelFilePath(ItemDisplayInfoRec& rec, const ItemDisplayInfoRec*& displayRec);
     CharSectionsRec* GetSectionsRecord(COMPONENT_VARIATIONS variation, int32_t variationIndex, int32_t colorIndex, bool* found);
     bool Init(ComponentData* data, const char* debug);

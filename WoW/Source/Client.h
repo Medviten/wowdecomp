@@ -36,6 +36,11 @@ enum WOWCMDOPT {
     CMD_CONSOLE = 35,
     CMD_HW_DETECT = 36,
     CMD_GX_OVERRIDE = 39,
+    // Custom: -login "name" -password "pass" -realmlist "host" -realmname "realm" auto-login switches
+    CMD_LOGIN = 100,
+    CMD_PASSWORD = 101,
+    CMD_REALM_LIST = 102,
+    CMD_REALM_NAME = 103,
 };
 
 struct ARCHIVEINFO {
@@ -93,6 +98,12 @@ uint32_t GetM2CvarFlags();
 int32_t InitializeEngineCallback(const void* data, void* param);
 bool InitializeGlobal();
 bool LocaleCallback(CVar* var, const char* oldValue, const char* value, void* arg);
+// Custom: Cataclysm-style altered forms (alteredFormRaces); 0 when the race has none
+bool AlteredFormRacesCallback(CVar* var, const char* oldValue, const char* value, void* arg);
+uint32_t ClientGetAlteredFormRace(uint32_t race);
+// Custom: races whose shapeshift models follow skin (fur) color (shapeshiftSkinColorRaces)
+bool ShapeshiftSkinColorRacesCallback(CVar* var, const char* oldValue, const char* value, void* arg);
+bool ClientShapeshiftUsesSkinColor(uint32_t race);
 int main();
 int32_t Packet_SMSG_NOTIFICATION(void* param, NETMESSAGE msgId, uint32_t time, CDataStore* msg);
 int32_t Packet_SMSG_PLAYED_TIME(void* param, NETMESSAGE msgId, uint32_t time, CDataStore* msg);

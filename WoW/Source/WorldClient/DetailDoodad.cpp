@@ -16,6 +16,8 @@
 #include "Engine/Source/Services/Texture.h"
 #include "Engine/Source/ShaderEffect/ShaderEffect.h"
 #include "Engine/Source/ShaderEffect/ShadowCache.h"
+#include "Engine/Source/ConsoleBase/ConsoleVar.h"
+#include "Engine/Source/Os/TimeManager.h"
 #include "Engine/Source/Storm/H/storm.h"
 #include "Engine/Source/Tempest/C33Matrix.h"
 #include "Engine/Source/Tempest/CImVector.h"
@@ -30,6 +32,7 @@
 #include "WoW/Source/WorldClient/MapObjGroup.h"
 #include "WoW/Source/WorldClient/Types.h"
 #include "WoW/Source/WorldClient/World.h"
+#include "WoW/Source/WorldClient/WorldParam.h"
 
 // STATIC: 0x00D1C4C4
 static uint32_t s_indexBufferSize;
@@ -81,6 +84,119 @@ TSGrowableArray<CDetailDoodadData*> CDetailDoodad::s_doodadList;
 
 // STATIC: 0x00D1C518
 CDetailDoodad::SShaderConstants CDetailDoodad::s_shaderConstants;
+
+// Custom: grass wind. The detail doodad vertices are filled on the CPU (relative to their map chunk), so the sway is
+// applied there: each blade gets a world-plane offset from two travelling sine waves (plus a push away from the
+// player), weighted by vertex height within the blade squared, so the base stays put and the tip moves most. While
+// grassWind is on, visible batches are refilled every frame; with it off nothing changes from stock.
+namespace {
+
+struct GrassWindFrame {
+    bool active;
+    bool parting;
+    C3Vector player;
+    C3Vector chunkOrigin;
+    float dirX;
+    float dirY;
+    float crossX;
+    float crossY;
+    float phase1;
+    float phase2;
+    float strength;
+};
+
+GrassWindFrame s_wind;
+
+const float kTwoPi = 6.2831853f;
+const float kWaveNumber1 = kTwoPi / 18.0f;  // primary wave, 18 yard wavelength
+const float kWaveNumber2 = kTwoPi / 6.5f;   // cross swell, 6.5 yard wavelength
+const float kCrossAngle = 0.6108652f;       // cross swell heading offset, 35 degrees
+const float kBaseSpeed = 3.0f;              // wave travel speed at grassWindSpeed 1, yards per second
+const float kSwayAmplitude = 0.08f;         // primary sway at the tip, fraction of blade height
+const float kCrossAmplitude = 0.03f;        // cross swell at the tip, fraction of blade height
+const float kLean = 0.35f;                  // constant downwind lean, fraction of the primary sway
+const float kPartRadius = 2.0f;             // parting radius around the player, yards
+const float kPartForce = 0.6f;              // parting lean at the player, fraction of blade height
+const float kMaxOffset = 0.7f;              // cap on the total tip offset, fraction of blade height
+
+float Fraction(float value) {
+    return value - floorf(value);
+}
+
+// World-plane tip offset for one blade at world position (x, y, z) that is `height` yards tall
+void WindOffset(float x, float y, float z, float height, float& offsetX, float& offsetY) {
+    float jitter = Fraction(x * 0.737f + y * 1.311f) * 1.7f;
+    float variance = 0.7f + 0.6f * Fraction(x * 1.913f + y * 0.417f);
+    float wave1 = sinf((x * s_wind.dirX + y * s_wind.dirY) * kWaveNumber1 + s_wind.phase1 + jitter) + kLean;
+    float wave2 = sinf((x * s_wind.crossX + y * s_wind.crossY) * kWaveNumber2 + s_wind.phase2 + jitter);
+    float amplitude = s_wind.strength * height * variance;
+
+    offsetX = (s_wind.dirX * wave1 * kSwayAmplitude + s_wind.crossX * wave2 * kCrossAmplitude) * amplitude;
+    offsetY = (s_wind.dirY * wave1 * kSwayAmplitude + s_wind.crossY * wave2 * kCrossAmplitude) * amplitude;
+
+    if (s_wind.parting) {
+        float dx = x - s_wind.player.x;
+        float dy = y - s_wind.player.y;
+        float distanceSquared = dx * dx + dy * dy;
+
+        if (distanceSquared < kPartRadius * kPartRadius && distanceSquared > 0.000001f && fabsf(z - s_wind.player.z) < 3.0f) {
+            float distance = sqrtf(distanceSquared);
+            float push = (1.0f - distance / kPartRadius) * kPartForce * height / distance;
+            offsetX += dx * push;
+            offsetY += dy * push;
+        }
+    }
+
+    float maxOffset = kMaxOffset * height;
+    float lengthSquared = offsetX * offsetX + offsetY * offsetY;
+
+    if (lengthSquared > maxOffset * maxOffset) {
+        float scale = maxOffset / sqrtf(lengthSquared);
+        offsetX *= scale;
+        offsetY *= scale;
+    }
+}
+
+}
+
+// Custom: grass wind, sampled once per frame before the detail doodads draw
+void CDetailDoodad::BeginWindFrame(const C3Vector* playerPosition) {
+    CVar* enabled = CWorldParam::cvar_grassWind;
+    s_wind.active = enabled && enabled->m_intValue;
+
+    if (!s_wind.active) {
+        return;
+    }
+
+    float heading = CWorldParam::cvar_grassWindDirection->m_floatValue * (kTwoPi / 360.0f);
+    s_wind.dirX = cosf(heading);
+    s_wind.dirY = sinf(heading);
+    s_wind.crossX = cosf(heading + kCrossAngle);
+    s_wind.crossY = sinf(heading + kCrossAngle);
+
+    float speed = kBaseSpeed * CWorldParam::cvar_grassWindSpeed->m_floatValue;
+    double seconds = OsGetAsyncTimeMs() * 0.001;
+    s_wind.phase1 = -static_cast<float>(fmod(seconds * speed * kWaveNumber1, static_cast<double>(kTwoPi)));
+    s_wind.phase2 = -static_cast<float>(fmod(seconds * speed * 1.37 * kWaveNumber2, static_cast<double>(kTwoPi)));
+
+    float strength = CWorldParam::cvar_grassWindStrength->m_floatValue;
+    s_wind.strength = strength < 0.0f ? 0.0f : (strength > 10.0f ? 10.0f : strength);
+
+    s_wind.parting = playerPosition && CWorldParam::cvar_grassParting->m_intValue;
+
+    if (playerPosition) {
+        s_wind.player = *playerPosition;
+    }
+}
+
+// Custom: origin (world position) the next batches' vertices are relative to
+void CDetailDoodad::SetWindChunk(const C3Vector& chunkOrigin) {
+    s_wind.chunkOrigin = chunkOrigin;
+}
+
+bool CDetailDoodad::WindActive() {
+    return s_wind.active;
+}
 
 // VERIFY: 1a974b50 auto
 // OFFSET: 0x007B1000
@@ -373,6 +489,30 @@ void CDetailDoodadInstBatch::FillVertices() {
             color.a = 0xFF;
         }
 
+        // Custom: grass wind tip offset for this blade, and its local height range for the per-vertex bend weight
+        float windX = 0.0f;
+        float windY = 0.0f;
+        float minZ = 0.0f;
+        float invHeight = 0.0f;
+
+        if (s_wind.active) {
+            minZ = m2Data->m_vertices[skin->m_vertices[0]].m_position.z;
+            float maxZ = minZ;
+
+            for (uint32_t j = 1; j < vertexCount; j++) {
+                float z = m2Data->m_vertices[skin->m_vertices[j]].m_position.z;
+                minZ = z < minZ ? z : minZ;
+                maxZ = z > maxZ ? z : maxZ;
+            }
+
+            float height = (maxZ - minZ) * add.m_scale;
+
+            if (height > 0.01f) {
+                invHeight = 1.0f / (maxZ - minZ);
+                WindOffset(s_wind.chunkOrigin.x + add.m_position.x, s_wind.chunkOrigin.y + add.m_position.y, s_wind.chunkOrigin.z + add.m_position.z, height, windX, windY);
+            }
+        }
+
         if (g_theGxDevicePtr->Caps().m_colorFormat == GxCF_rgba) {
             CImVector swapped;
             swapped.a = color.a;
@@ -408,6 +548,15 @@ void CDetailDoodadInstBatch::FillVertices() {
                 vertex->m_position.x = position.x * add.m_scale + add.m_position.x;
                 vertex->m_position.y = position.y * add.m_scale + add.m_position.y;
                 vertex->m_position.z = position.z * add.m_scale + add.m_position.z;
+
+                // Custom: grass wind bend, (height within the blade)^2 so the base stays put
+                if (invHeight > 0.0f) {
+                    float bend = (source.m_position.z - minZ) * invHeight;
+                    bend *= bend;
+                    vertex->m_position.x += windX * bend;
+                    vertex->m_position.y += windY * bend;
+                }
+
                 vertex->m_normal = add.m_normal;
                 vertex->m_color = color;
                 vertex->m_texture = source.m_texcoord[0];
@@ -422,6 +571,15 @@ void CDetailDoodadInstBatch::FillVertices() {
                 vertex->m_position.x = (source.m_position.x * c - source.m_position.y * s) * add.m_scale + add.m_position.x;
                 vertex->m_position.y = (source.m_position.y * c + source.m_position.x * s) * add.m_scale + add.m_position.y;
                 vertex->m_position.z = source.m_position.z * add.m_scale + add.m_position.z;
+
+                // Custom: grass wind bend, (height within the blade)^2 so the base stays put
+                if (invHeight > 0.0f) {
+                    float bend = (source.m_position.z - minZ) * invHeight;
+                    bend *= bend;
+                    vertex->m_position.x += windX * bend;
+                    vertex->m_position.y += windY * bend;
+                }
+
                 vertex->m_normal = add.m_normal;
                 vertex->m_color = color;
                 vertex->m_texture = source.m_texcoord[0];
@@ -724,7 +882,8 @@ void CDetailDoodadInstBatch::Draw() {
         AcquireBuffers(this->m_vertexCount, &this->m_vertexBuf, this->m_indexCount, &this->m_indexBuf);
     }
 
-    if (!this->m_vertexBuf->m_hasData || !this->m_vertexBuf->m_valid) {
+    // Custom: with grass wind on, the vertices move every frame, so always refill
+    if (!this->m_vertexBuf->m_hasData || !this->m_vertexBuf->m_valid || s_wind.active) {
         this->FillVertices();
     }
 

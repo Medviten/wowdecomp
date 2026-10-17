@@ -5,8 +5,11 @@
 #include <cstdint>
 
 struct TEXTEMOTELOOKUP {
-    /* 0000 */ int32_t m_soundIds[22][2];
-    /* 00B0 */ int32_t m_emotesTextId;
+    // Custom: was [22][2] (race IDs 0-21, m_emotesTextId at 0x00B0); widened to every uint8_t race ID
+    static const uint32_t NUM_RACES = 256;
+
+    /* 0000 */ int32_t m_soundIds[NUM_RACES][2];
+    /* 0800 */ int32_t m_emotesTextId;
 
     TEXTEMOTELOOKUP();
 };

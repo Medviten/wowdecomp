@@ -236,6 +236,27 @@ void CCharacterComponent::GetPreferences(CharacterPreferences* preferences) {
     }
 }
 
+// Custom: Cataclysm's CopyChoicesToAlteredFormComponent, generalized to copy toward `other`'s own race and sex: this
+// component's skin/face/hair/facial hair choices are validated for that race and applied, so both forms of a race with
+// an altered form (alteredFormRaces) show the same customization.
+void CCharacterComponent::CopyChoicesToComponent(CCharacterComponent* other, COMPONENT_CONTEXT context) {
+    if (!other || other == this) {
+        return;
+    }
+
+    CharacterPreferences prefs = this->m_data.m_preferences;
+    ComponentData data;
+    data.SetPreferences(&prefs);
+    data.m_preferences.m_raceID = other->m_data.m_preferences.m_raceID;
+    data.m_preferences.m_sexID = other->m_data.m_preferences.m_sexID;
+    CCharacterComponent::ValidateComponentData(&data, context);
+    other->SetSkinColor(data.m_preferences.m_skinID, false, true, nullptr);
+    other->SetHairColor(data.m_preferences.m_hairColorId, false, nullptr);
+    other->SetHairStyle(data.m_preferences.m_hairStyleId, nullptr);
+    other->SetFace(data.m_preferences.m_faceId, false, nullptr);
+    other->SetBeardStyle(data.m_preferences.m_facialHairId, true, nullptr);
+}
+
 // VERIFY: f0e7f328 manual
 // OFFSET: 0x004E6F90
 static int32_t CopyStringToBuffer(const char* src, char* dst) {

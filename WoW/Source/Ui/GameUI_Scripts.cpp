@@ -1835,7 +1835,9 @@ static int32_t Script_GetCVarMax(lua_State* L) {
 
         lua_pushnumber(L, mode - 1);
     } else if (!SStrCmpI(name, "farclip", STORM_MAX_STR)) {
-        lua_pushnumber(L, 1277.0);
+        // Custom: report farClipLimit as the max when set, so UI sliders built on GetCVarMax can reach it
+        CVar* limit = CVar::Lookup("farClipLimit");
+        lua_pushnumber(L, limit && limit->m_floatValue > 0.0f ? limit->m_floatValue : 1277.0);
     } else {
         lua_pushnil(L);
     }

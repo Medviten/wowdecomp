@@ -4,6 +4,7 @@
 #include <cstring>
 #include <new>
 #include "Engine/Source/Base/CDataStore.h"
+#include "Engine/Source/Base/CmdLine.h"
 #include "Engine/Source/Base/Coordinate.h"
 #include "Engine/Source/BlizzardCore/SFile2-Core.h"
 #include "Engine/Source/BlizzardCore/Source/Packages/Streaming/Streaming.h"
@@ -1081,6 +1082,53 @@ void CGlueMgr::Initialize() {
     AccountDataInitializeBasicSystem();
 }
 
+// Custom: copies a string command-line switch into a CVar, if the switch was given
+static void ApplyCommandLineCVar(WOWCMDOPT opt, const char* cvarName) {
+    const char* value = CmdLineGetString(static_cast<CMDOPT>(opt));
+    CVar* var;
+
+    if (*value && (var = CVar::Lookup(cvarName))) {
+        var->Set(value, true, false, false, true);
+    }
+}
+
+// Custom: handles -realmlist "host" -realmname "realm" -login "name" -password "pass" from the command line.
+// The realm switches are applied on the first login-screen frame (after realmlist.wtf and Config.wtf have
+// loaded, so they win); realmName makes the client connect straight to that realm after login.
+// Login happens once LoginServerLogin's preconditions (Scan.dll, TOS, EULA) are met, and only once per launch,
+// so logging out or a disconnect returns to the login screen.
+static void CommandLineAutoLogin() {
+    static bool s_realmApplied;
+    static bool s_attempted;
+
+    if (s_attempted || SStrCmpI(CGlueMgr::m_currentScreen, "login", STORM_MAX_STR)) {
+        return;
+    }
+
+    if (!s_realmApplied) {
+        s_realmApplied = true;
+        ApplyCommandLineCVar(CMD_REALM_LIST, "realmList");
+        ApplyCommandLineCVar(CMD_REALM_NAME, "realmName");
+    }
+
+    if (!CGlueMgr::m_scandllOkayToLogIn || !CGlueMgr::m_acceptedTOS || !CGlueMgr::m_acceptedEULA) {
+        return;
+    }
+
+    s_attempted = true;
+
+    char login[260];
+    char password[260];
+    SStrCopy(login, CmdLineGetString(static_cast<CMDOPT>(CMD_LOGIN)), sizeof(login));
+    SStrCopy(password, CmdLineGetString(static_cast<CMDOPT>(CMD_PASSWORD)), sizeof(password));
+
+    if (*login && *password) {
+        CGlueMgr::LoginServerLogin(login, password);
+    }
+
+    memset(password, 0, sizeof(password));
+}
+
 // VERIFY: 5e7db3b8 manual
 // OFFSET: 0x004DAB40
 int32_t CGlueMgr::Idle(const void* data, void* param) {
@@ -1122,6 +1170,7 @@ int32_t CGlueMgr::Idle(const void* data, void* param) {
         }
 
         CGlueMgr::HandleBattlenetDisconnect();
+        CommandLineAutoLogin();
 
         return 1;
     }

@@ -23,6 +23,9 @@
 #include "WoW/Source/ObjectMgrClient/ObjectMgrClient.h"
 #include "WoW/Source/Game/GameClient/CDrawBowString.h"
 #include "WoW/Source/Ui/GameUI.h"
+#include "WoW/Source/Ui/BarberShop.h"
+#include "WoW/Source/Client.h"
+#include "WoW/Source/DB/Rec/ChrRacesRec.h"
 #include <cstdlib>
 #include <cstring>
 
@@ -69,6 +72,20 @@ CSimpleFrame* CGDressUpModelFrame::Create(CSimpleFrame* parent) {
 // OFFSET: 0x00597B50
 CGDressUpModelFrame::CGDressUpModelFrame(CSimpleFrame* parent) : CGCharacterModelBase(parent) {
     this->m_component = nullptr;
+    this->m_barberShopAlternateForm = 0;
+}
+
+// Custom: race of the player's other form for the barber shop preview: the native race while in the altered form,
+// otherwise the altered race (alteredFormRaces); 0 when the race has none
+static uint32_t GetAlternateFormRace(CGPlayer_C* player) {
+    uint32_t native = player->m_unit->m_unitFieldBytes0[0];
+    uint32_t altered = ClientGetAlteredFormRace(native);
+
+    if (!altered) {
+        return 0;
+    }
+
+    return player->IsInAlteredForm() ? native : altered;
 }
 
 // VERIFY: cc335fc2 auto
@@ -183,7 +200,21 @@ CM2Model* CGDressUpModelFrame::GetDuplicateUnitCharacterModel(CGUnit_C* unit) {
         return nullptr;
     }
 
-    CreatureDisplayInfoRec* display = g_creatureDisplayInfoDB.GetRecord(unit->m_unit->m_unitFieldNativedisplayid);
+    int32_t displayId = unit->m_unit->m_unitFieldNativedisplayid;
+
+    // Custom: the barber shop's other-form preview uses that race's own character model
+    if (this->m_barberShopAlternateForm && (unit->m_obj->m_type & TYPEMASK_PLAYER)) {
+        CGPlayer_C* player = static_cast<CGPlayer_C*>(unit);
+        ChrRacesRec* raceRec = g_chrRacesDB.GetRecord(GetAlternateFormRace(player));
+
+        if (!raceRec) {
+            return nullptr;
+        }
+
+        displayId = player->m_player->m_playerBytes3[0] ? raceRec->m_femaleDisplayID : raceRec->m_maleDisplayID;
+    }
+
+    CreatureDisplayInfoRec* display = g_creatureDisplayInfoDB.GetRecord(displayId);
 
     if (!display) {
         return nullptr;
@@ -524,9 +555,26 @@ void CGDressUpModelFrame::SetModel(CM2Model* model) {
         data.m_preferences.m_hairStyleId = player->m_player->m_playerBytes[2];
         data.m_preferences.m_hairColorId = player->m_player->m_playerBytes[3];
         data.m_preferences.m_facialHairId = player->m_player->m_playerBytes2[0];
+        // Custom: the barber shop's other-form preview is built as the other race, from the choices currently previewed on
+        // the player (so it follows the barber shop), validated for that race
+        bool alternateForm = this->m_barberShopAlternateForm && GetAlternateFormRace(player);
+
+        if (alternateForm) {
+            data.m_preferences.m_raceID = GetAlternateFormRace(player);
+
+            if (player->m_characterComponent) {
+                const CharacterPreferences& current = player->m_characterComponent->m_data.m_preferences;
+                data.m_preferences.m_skinID = current.m_skinID;
+                data.m_preferences.m_faceId = current.m_faceId;
+                data.m_preferences.m_hairStyleId = current.m_hairStyleId;
+                data.m_preferences.m_hairColorId = current.m_hairColorId;
+                data.m_preferences.m_facialHairId = current.m_facialHairId;
+            }
+        }
+
         data.m_model = model;
         data.m_flags ^= (data.m_flags ^ (static_cast<uint32_t>(player->m_obj->m_guid == ClntObjMgrGetActivePlayer()) << 1)) & 0x2;
-        CCharacterComponent::ValidateComponentData(&data, COMPONENT_CONTEXT_2);
+        CCharacterComponent::ValidateComponentData(&data, alternateForm ? COMPONENT_CONTEXT_1 : COMPONENT_CONTEXT_2);
         this->m_component->Init(&data, nullptr);
         s_mainHandItemId = 0;
         s_offHandItemId = 0;
@@ -589,6 +637,14 @@ void CGDressUpModelFrame::SetModel(CM2Model* model) {
         }
 
         this->m_isNativeDisplay = player->m_unit->m_unitFieldNativedisplayid == player->m_unit->m_unitFieldDisplayid;
+
+        // Custom: dress the other-form preview like the player in the barber shop (no helm or shoulders, barber tabard)
+        if (alternateForm && CGBarberShop::m_barberShopEnabled) {
+            this->m_component->RemoveItemBySlot(INVSLOT_HEAD);
+            this->m_component->RemoveItemBySlot(INVSLOT_SHOULDER);
+            this->m_component->AddItemBySlot(INVSLOT_TABARD, 54559, 0);
+        }
+
         return;
     }
 

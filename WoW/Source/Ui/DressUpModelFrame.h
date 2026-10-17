@@ -31,7 +31,8 @@ class CGDressUpModelFrame : public CGCharacterModelBase {
     /* 0384 */ CGUnitVirtualItem m_mainHand;
     /* 038C */ CGUnitVirtualItem m_offHand;
     /* 0394 */ uint8_t m_isNativeDisplay;
-    /* 0395 */ uint8_t unused_0395 [3];
+    /* 0395 */ uint8_t m_barberShopAlternateForm; // Custom: shows the player's other form (see CGBarberShop)
+    /* 0396 */ uint8_t unused_0396 [2];
 
     ~CGDressUpModelFrame() override;
     int32_t GetScriptMetaTable() override;

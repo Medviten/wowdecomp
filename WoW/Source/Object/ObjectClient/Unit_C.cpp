@@ -24,6 +24,7 @@
 #include "WoW/Source/DB/Rec/AreaTableRec.h"
 #include "WoW/Source/DB/Rec/ChrClassesRec.h"
 #include "WoW/Source/DB/Rec/ChrRacesRec.h"
+#include "WoW/Source/Client.h"
 #include "WoW/Source/DB/Rec/CreatureDisplayInfoRec.h"
 #include "WoW/Source/DB/Rec/CreatureModelDataRec.h"
 #include "WoW/Source/DB/Rec/CreatureMovementInfoRec.h"
@@ -7179,6 +7180,11 @@ int32_t CGUnit_C::CanEquipItemsInThisForm() const {
         return 1;
     }
 
+    // Custom: the altered form is a full character, so it shows gear like the native form
+    if (this->IsInAlteredForm()) {
+        return 1;
+    }
+
     if (this->m_shapeshiftSuppressed) {
         return 1;
     }
@@ -7190,6 +7196,28 @@ int32_t CGUnit_C::CanEquipItemsInThisForm() const {
     }
 
     return unit->m_unitFieldNativedisplayid == unit->m_unitFieldDisplayid;
+}
+
+// Custom: see Unit_C.h. The altered race's own male/female character display (ChrRaces) marks the altered form.
+bool CGUnit_C::IsInAlteredForm() const {
+    if (!(this->m_obj->m_type & TYPEMASK_PLAYER) || this->m_displayInfoExtra) {
+        return false;
+    }
+
+    uint32_t altered = ClientGetAlteredFormRace(this->m_unit->m_unitFieldBytes0[0]);
+    ChrRacesRec* alteredRec = altered ? g_chrRacesDB.GetRecord(altered) : nullptr;
+
+    if (!alteredRec) {
+        return false;
+    }
+
+    int32_t displayId = this->m_displayId;
+
+    if (!displayId || this->m_unit->m_unitFieldNativedisplayid != this->m_unit->m_unitFieldDisplayid) {
+        displayId = this->m_unit->m_unitFieldDisplayid;
+    }
+
+    return displayId && (displayId == alteredRec->m_maleDisplayID || displayId == alteredRec->m_femaleDisplayID);
 }
 
 // VERIFY: 8b19ad28 manual
@@ -8494,7 +8522,8 @@ bool CGUnit_C::CanCurrentFormMount() const {
         return false;
     }
 
-    if (this->m_unit->m_unitFieldNativedisplayid == this->m_unit->m_unitFieldDisplayid) {
+    // Custom: the altered form can mount like the native form
+    if (this->m_unit->m_unitFieldNativedisplayid == this->m_unit->m_unitFieldDisplayid || this->IsInAlteredForm()) {
         return true;
     }
 
@@ -13823,6 +13852,11 @@ int32_t CGUnit_C::InitializeExtendedDisplay(CGPlayer_C* player, int32_t hasDispl
     } else {
         data.m_preferences.m_raceID = this->m_unit->m_unitFieldBytes0[0];
         data.m_preferences.m_sexID = this->m_unit->m_unitFieldBytes0[2];
+
+        // Custom: the altered form is built as the altered race from the same choices (Cataclysm Worgen/Human)
+        if (this->IsInAlteredForm()) {
+            data.m_preferences.m_raceID = ClientGetAlteredFormRace(this->m_unit->m_unitFieldBytes0[0]);
+        }
     }
 
     data.m_preferences.m_classId = this->m_unit->m_unitFieldBytes0[1];

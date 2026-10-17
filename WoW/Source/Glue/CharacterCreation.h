@@ -14,7 +14,8 @@ struct CharacterPreferences;
 
 class CCharacterCreation {
     public:
-    static CharacterPreferences* m_charPreferences[22][2];
+    // Custom: was [22][2] (race IDs 0-21); race IDs are uint8_t, so 256 covers every possible ChrRaces ID
+    static CharacterPreferences* m_charPreferences[256][2];
     static CCharacterComponent* m_character;
     static CNameGen m_nameGen;
     static CSimpleModelFFX* m_charCustomizeFrame;
@@ -52,6 +53,16 @@ class CCharacterCreation {
     static void SetSelectedSex(uint32_t sexID);
     static void SetToExistingCharacter(uint32_t index);
     static void Shutdown();
+
+    // Custom: Cataclysm-style altered form preview (alteredFormRaces). The altered form is a second character of the
+    // altered race with the same choices, attached to the background model at attachment 1 (back) or 0 (front).
+    static CCharacterComponent* m_alteredCharacter;
+    static int32_t m_alteredFormAtFront;
+    static void CreateAlteredCharacter();
+    static void SyncAlteredCharacter();
+    static void AttachCharacters();
+    static void SetViewingAlteredForm(int32_t alteredForm);
+    static void DressComponent(CCharacterComponent* component);
 };
 
 bool IsRaceClassValid(int32_t raceID, int32_t classID);

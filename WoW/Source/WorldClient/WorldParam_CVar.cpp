@@ -88,6 +88,34 @@ CVar* CWorldParam::cvar_terrainAlphaBitDepth;
 // STATIC: 0x00CD85C8
 CVar* CWorldParam::cvar_farClipOverride;
 
+// Custom: view distance cap and fog toggle
+CVar* CWorldParam::cvar_farClipLimit;
+CVar* CWorldParam::cvar_disableFog;
+
+// Custom: grass wind
+CVar* CWorldParam::cvar_grassWind;
+CVar* CWorldParam::cvar_grassWindStrength;
+CVar* CWorldParam::cvar_grassWindSpeed;
+CVar* CWorldParam::cvar_grassWindDirection;
+CVar* CWorldParam::cvar_grassParting;
+
+// Custom: farClipLimit 0 keeps the stock caps; otherwise 183-100000 yards. Re-applies farclip so it takes effect at once.
+static bool FarClipLimitCallback(CVar* var, const char* oldValue, const char* value, void* arg) {
+    float limit = SStrToFloat(value);
+
+    if (limit != 0.0f && (limit < 550.0f / 3.0f || limit > 100000.0f)) {
+        ConsoleWrite("farClipLimit must be 0 (stock) or 183-100000.", DEFAULT_COLOR);
+        return false;
+    }
+
+    if (CWorldParam::cvar_farClip) {
+        var->m_floatValue = limit;
+        World::SetFarClip(CWorldParam::cvar_farClip->m_floatValue);
+    }
+
+    return true;
+}
+
 // STATIC: 0x00CD85CC
 CVar* CWorldParam::cvar_objectFade;
 
@@ -623,6 +651,14 @@ bool CWorldParam::GxTextureCacheSizeCallback(CVar* var, const char* oldValue, co
 // OFFSET: 0x0078E400
 void CWorldParam::Initialize() {
     CWorldParam::cvar_farClipOverride = CVar::Register("farClipOverride", "Override old world graphic settings", 1, "0", CWorldParam::FarClipOverrideCallback, CATEGORY_GRAPHICS, false, nullptr, false);
+    // Custom: registered before farclip so a large saved farclip isn't clamped by the stock cap at load
+    CWorldParam::cvar_farClipLimit = CVar::Register("farClipLimit", "Max view distance in yards (0 = stock cap)", 1, "0", FarClipLimitCallback, CATEGORY_GRAPHICS, false, nullptr, false);
+    CWorldParam::cvar_grassWind = CVar::Register("grassWind", "Animate grass with wind (0 = stock, static grass)", 1, "0", nullptr, CATEGORY_GRAPHICS, false, nullptr, false);
+    CWorldParam::cvar_grassWindStrength = CVar::Register("grassWindStrength", "Grass sway amount (1 = default)", 1, "1.0", nullptr, CATEGORY_GRAPHICS, false, nullptr, false);
+    CWorldParam::cvar_grassWindSpeed = CVar::Register("grassWindSpeed", "Grass wind wave speed (1 = default)", 1, "1.0", nullptr, CATEGORY_GRAPHICS, false, nullptr, false);
+    CWorldParam::cvar_grassWindDirection = CVar::Register("grassWindDirection", "Grass wind heading in degrees", 1, "45", nullptr, CATEGORY_GRAPHICS, false, nullptr, false);
+    CWorldParam::cvar_grassParting = CVar::Register("grassParting", "Grass bends away from your character (needs grassWind)", 1, "1", nullptr, CATEGORY_GRAPHICS, false, nullptr, false);
+    CWorldParam::cvar_disableFog = CVar::Register("disableFog", "Push distance fog past the horizon (not underwater)", 1, "0", nullptr, CATEGORY_GRAPHICS, false, nullptr, false);
     CWorldParam::cvar_lod = CVar::Register("lod", "Video option: Toggle Lod", 1, "0", CWorldParam::LodCallback, CATEGORY_GRAPHICS, false, nullptr, false);
     CWorldParam::cvar_mapShadows = CVar::Register("mapShadows", "Video option: Toggle map shadows", 1, "1", CWorldParam::MapShadowsCallback, CATEGORY_GRAPHICS, false, nullptr, false);
     CWorldParam::cvar_maxLights = CVar::Register("MaxLights", "Max number of hardware lights", 1, "4", CWorldParam::MaxLightsCallback, CATEGORY_GRAPHICS, false, nullptr, false);

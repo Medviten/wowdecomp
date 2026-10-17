@@ -581,6 +581,9 @@ class CGUnit_C : public CGObject_C, public CGUnit {
     int32_t IsControlledByViewer() const;
     bool CanAttack(const CGUnit_C* unit) const;
     int32_t CanEquipItemsInThisForm() const;
+    // Custom: true when a player whose race has an altered form (alteredFormRaces) currently shows that race's own
+    // character model, so it is drawn as a full character of the altered race with the player's choices
+    bool IsInAlteredForm() const;
     uint32_t GetVoiceSex() const;
     bool IsShapeShifted() const;
     void PreemptivelyCancelShapeshift();

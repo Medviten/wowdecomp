@@ -245,105 +245,81 @@ int32_t BuildComponentArray(uint32_t count, st_race** lookupOut) {
 
     st_race* lookup = new (__FILE__, __LINE__) st_race[count];
 
-    int32_t variationIndex = 0;
-    CharSectionsRec* first = (0 >= g_charSectionsDB.m_numRecords) ? nullptr : &g_charSectionsDB.m_records[0];
-    int32_t raceID = first->m_raceID;
-    int32_t sexID = first->m_sexID;
-    int32_t baseSection = first->m_baseSection;
-
-    for (int32_t i = 0; i < g_charSectionsDB.m_numRecords; i++) {
-        CharSectionsRec* rec = (i < 0 || i >= g_charSectionsDB.m_numRecords) ? nullptr : &g_charSectionsDB.m_records[i];
-
-        if (rec->m_baseSection >= NUM_COMPONENT_VARIATIONS) {
-            continue;
+    // Custom: the original sized these lists from contiguous runs of CharSections records, assuming the DBC is sorted
+    // by race, sex, section, variation and color (Blizzard's is). With custom rows appended out of order, a race/sex/section
+    // split across runs got an array sized for its last run only, and the color pass then wrote past it (heap
+    // corruption that crashed on whichever race the heap layout happened to put in harm's way). These passes take the
+    // maximum over all records instead, which gives the same sizes for sorted data. Records whose race is outside
+    // ChrRaces or whose sex isn't 0/1 are skipped, as they would index past the lookup.
+    auto getList = [lookup, count](const CharSectionsRec* rec) -> CharVariationList* {
+        if (rec->m_baseSection < 0 || rec->m_baseSection >= NUM_COMPONENT_VARIATIONS || rec->m_sexID < 0 || rec->m_sexID > 1 || rec->m_raceID < 0) {
+            return nullptr;
         }
 
-        if (raceID != rec->m_raceID || sexID != rec->m_sexID || baseSection != rec->m_baseSection) {
-            CharVariationList& list = lookup[raceID * 2 + sexID].m_variation[baseSection];
-            list.m_numVariations = variationIndex + 1;
+        uint32_t index = static_cast<uint32_t>(rec->m_raceID) * 2 + static_cast<uint32_t>(rec->m_sexID);
+        return index < count ? &lookup[index].m_variation[rec->m_baseSection] : nullptr;
+    };
+
+    // Pass 1: number of variations per race/sex/section
+    for (int32_t i = 0; i < g_charSectionsDB.m_numRecords; i++) {
+        CharSectionsRec* rec = &g_charSectionsDB.m_records[i];
+        CharVariationList* list = getList(rec);
+
+        if (list && rec->m_variationIndex >= 0 && rec->m_variationIndex + 1 > list->m_numVariations) {
+            list->m_numVariations = rec->m_variationIndex + 1;
+        }
+    }
+
+    for (uint32_t i = 0; i < count; i++) {
+        for (int32_t j = 0; j < NUM_COMPONENT_VARIATIONS; j++) {
+            CharVariationList& list = lookup[i].m_variation[j];
 
             if (list.m_numVariations > 0) {
                 list.m_variation = new (__FILE__, __LINE__) CharColorList[list.m_numVariations];
             }
-
-            variationIndex = 0;
         }
-
-        if (variationIndex <= rec->m_variationIndex) {
-            variationIndex = rec->m_variationIndex;
-        }
-
-        raceID = rec->m_raceID;
-        sexID = rec->m_sexID;
-        baseSection = rec->m_baseSection;
     }
 
-    CharVariationList& lastList = lookup[raceID * 2 + sexID].m_variation[baseSection];
-    lastList.m_numVariations = variationIndex + 1;
-
-    if (lastList.m_numVariations > 0) {
-        lastList.m_variation = new (__FILE__, __LINE__) CharColorList[lastList.m_numVariations];
-    }
-
-    sexID = 0;
-    raceID = 1;
-    baseSection = 0;
-    variationIndex = 0;
-    int32_t colorIndex = 0;
-
+    // Pass 2: number of colors per variation
     for (int32_t i = 0; i < g_charSectionsDB.m_numRecords; i++) {
-        CharSectionsRec* rec = (i < 0 || i >= g_charSectionsDB.m_numRecords) ? nullptr : &g_charSectionsDB.m_records[i];
+        CharSectionsRec* rec = &g_charSectionsDB.m_records[i];
+        CharVariationList* list = getList(rec);
 
-        if (rec->m_baseSection >= NUM_COMPONENT_VARIATIONS) {
+        if (!list || rec->m_variationIndex < 0 || rec->m_variationIndex >= list->m_numVariations || rec->m_colorIndex < 0) {
             continue;
         }
 
-        if (raceID != rec->m_raceID || sexID != rec->m_sexID || baseSection != rec->m_baseSection || variationIndex != rec->m_variationIndex) {
-            CharVariationList& list = lookup[raceID * 2 + sexID].m_variation[baseSection];
+        CharColorList& colors = list->m_variation[rec->m_variationIndex];
 
-            if (list.m_numVariations > 0) {
-                CharColorList& colors = list.m_variation[variationIndex];
-                colors.m_numColors = colorIndex + 1;
-
-                if (colors.m_numColors > 0) {
-                    colors.m_color = new (__FILE__, __LINE__) CharSectionsRec*[colorIndex + 1]();
-                }
-            }
-
-            colorIndex = 0;
+        if (rec->m_colorIndex + 1 > colors.m_numColors) {
+            colors.m_numColors = rec->m_colorIndex + 1;
         }
-
-        if (colorIndex <= rec->m_colorIndex) {
-            colorIndex = rec->m_colorIndex;
-        }
-
-        raceID = rec->m_raceID;
-        sexID = rec->m_sexID;
-        baseSection = rec->m_baseSection;
-        variationIndex = rec->m_variationIndex;
     }
 
-    CharVariationList& lastColors = lookup[raceID * 2 + sexID].m_variation[baseSection];
+    for (uint32_t i = 0; i < count; i++) {
+        for (int32_t j = 0; j < NUM_COMPONENT_VARIATIONS; j++) {
+            CharVariationList& list = lookup[i].m_variation[j];
 
-    if (lastColors.m_numVariations > 0) {
-        CharColorList& colors = lastColors.m_variation[variationIndex];
-        colors.m_numColors = colorIndex + 1;
+            for (int32_t k = 0; k < list.m_numVariations; k++) {
+                CharColorList& colors = list.m_variation[k];
 
-        if (colors.m_numColors > 0) {
-            colors.m_color = new (__FILE__, __LINE__) CharSectionsRec*[colorIndex + 1]();
+                if (colors.m_numColors > 0) {
+                    colors.m_color = new (__FILE__, __LINE__) CharSectionsRec*[colors.m_numColors]();
+                }
+            }
         }
     }
 
     for (int32_t i = 0; i < g_charSectionsDB.m_numRecords; i++) {
         CharSectionsRec* rec = (i < 0 || i >= g_charSectionsDB.m_numRecords) ? nullptr : &g_charSectionsDB.m_records[i];
 
-        if (rec->m_baseSection >= NUM_COMPONENT_VARIATIONS) {
+        if (!getList(rec)) {
             continue;
         }
 
         int32_t recVariation = rec->m_variationIndex;
         int32_t recColor = rec->m_colorIndex;
-        CharVariationList& list = lookup[rec->m_raceID * 2 + rec->m_sexID].m_variation[rec->m_baseSection];
+        CharVariationList& list = *getList(rec);
 
         if (list.m_numVariations > 0 && recVariation < list.m_numVariations) {
             CharColorList& colors = list.m_variation[recVariation];
@@ -375,7 +351,14 @@ int32_t CountFacialFeatures(uint32_t count, uint32_t** facialFeatures) {
             return 0;
         }
 
-        counts[rec->m_raceID * 2 + rec->m_sexID]++;
+        // Custom: skip rows whose race is outside ChrRaces or whose sex isn't 0/1 instead of writing past counts
+        uint32_t index = static_cast<uint32_t>(rec->m_raceID) * 2 + static_cast<uint32_t>(rec->m_sexID);
+
+        if (rec->m_raceID < 0 || rec->m_sexID < 0 || rec->m_sexID > 1 || index >= count) {
+            continue;
+        }
+
+        counts[index]++;
     }
 
     *facialFeatures = counts;

@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <malloc.h>
 #include <typeinfo>
+#include <vector>
 #include "Engine/Source/SoundEngine/SoundCache.h"
 #include "Engine/Source/BlizzardCore/SFile2-Core.h"
 #include "Engine/Source/BlizzardCore/Source/System/Using/Using.h"
@@ -134,7 +135,10 @@ void SoundCache::Initialize() {
 // VERIFY: 66b8671f manual
 // OFFSET: 0x008775C0
 void SoundCache::Purge(uint32_t bytes) {
-    CacheChunkRef* refs = static_cast<CacheChunkRef*>(alloca(sizeof(CacheChunkRef) * (this->m_maxBytes >> 10)));
+    // Custom: the original alloca'd one entry per KB of SoundMemoryCache (16 bytes each on x64), so a large cache
+    // (e.g. 128 MB -> 2 MB) overflowed the stack; it also had no bound check. Grow on the heap instead.
+    std::vector<CacheChunkRef> refList;
+    refList.reserve(this->m_maxBytes >> 10);
     uint32_t count = 0;
 
     struct CacheData* data = this->m_table.m_fulllist.Head();
@@ -151,8 +155,10 @@ void SoundCache::Purge(uint32_t bytes) {
                     hasData = true;
 
                     if (!chunk->m_refCount) {
-                        refs[count].m_cacheData = data;
-                        refs[count].m_index = i;
+                        CacheChunkRef ref;
+                        ref.m_cacheData = data;
+                        ref.m_index = i;
+                        refList.push_back(ref);
                         count++;
                     }
                 }
@@ -166,6 +172,7 @@ void SoundCache::Purge(uint32_t bytes) {
         data = next;
     }
 
+    CacheChunkRef* refs = refList.data();
     SortChunkRefs(refs, count);
 
     for (uint32_t i = 0; i < count; i++) {

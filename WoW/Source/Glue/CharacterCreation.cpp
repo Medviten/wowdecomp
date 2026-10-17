@@ -27,6 +27,7 @@
 #include "WoW/Source/WowServices/Types.h"
 #include "WoW/Source/WowSvcs/WowSvcsClient/ClientServices.h"
 #include "WoW/Source/WowSvcs/WowSvcsClient/Types.h"
+#include "WoW/Source/Client.h"
 
 // STATIC: 0x00AC4220
 int32_t CCharacterCreation::m_selectedClassID = 1;
@@ -35,7 +36,7 @@ int32_t CCharacterCreation::m_selectedClassID = 1;
 int32_t CCharacterCreation::m_existingCharacterIndex = -1;
 
 // STATIC: 0x00B6B0D0
-CharacterPreferences* CCharacterCreation::m_charPreferences[22][2];
+CharacterPreferences* CCharacterCreation::m_charPreferences[256][2];
 
 // STATIC: 0x00B6B180
 uint32_t CCharacterCreation::m_raceIndex;
@@ -72,6 +73,10 @@ TSGrowableArray<int32_t> CCharacterCreation::m_races;
 
 // STATIC: 0x00B6B1DC
 CNameGen CCharacterCreation::m_nameGen;
+
+// Custom: altered form preview (see CharacterCreation.h)
+CCharacterComponent* CCharacterCreation::m_alteredCharacter;
+int32_t CCharacterCreation::m_alteredFormAtFront;
 
 // VERIFY: cbaddeb2 manual
 // OFFSET: 0x004E1C20
@@ -119,10 +124,18 @@ void CCharacterCreation::Shutdown() {
         CCharacterCreation::m_character = nullptr;
     }
 
+    // Custom: altered form preview
+    if (CCharacterCreation::m_alteredCharacter) {
+        CCharacterComponent::FreeComponent(CCharacterCreation::m_alteredCharacter);
+        CCharacterCreation::m_alteredCharacter = nullptr;
+    }
+
+    CCharacterCreation::m_alteredFormAtFront = 0;
+
     CCharacterCreation::m_nameGen.m_names.Clear();
     CCharacterCreation::m_nameGen.m_dictionary.Clear();
 
-    for (uint32_t i = 0; i < 22; i++) {
+    for (uint32_t i = 0; i < sizeof(CCharacterCreation::m_charPreferences) / sizeof(CCharacterCreation::m_charPreferences[0]); i++) {
         for (uint32_t j = 0; j < 2; j++) {
             delete CCharacterCreation::m_charPreferences[i][j];
             CCharacterCreation::m_charPreferences[i][j] = nullptr;
@@ -134,6 +147,12 @@ void CCharacterCreation::Shutdown() {
 // OFFSET: 0x004DFA50
 int32_t CCharacterCreation::Idle(const void* data, void* param) {
     CGlueLoading::Idle(CCharacterCreation::m_character);
+
+    // Custom: keep the altered form preview composited
+    if (CCharacterCreation::m_alteredCharacter) {
+        CCharacterCreation::m_alteredCharacter->RenderPrep(0);
+    }
+
     return 1;
 }
 
@@ -197,7 +216,8 @@ void CCharacterCreation::SetCharCustomizeModel(const char* modelName) {
     }
 
     if (CCharacterCreation::m_charCustomizeFrame->m_model && CCharacterCreation::m_character->m_data.m_model) {
-        CCharacterCreation::m_character->m_data.m_model->AttachToParent(CCharacterCreation::m_charCustomizeFrame->m_model, 0, nullptr, 0);
+        // Custom: attaches the altered form preview as well
+        CCharacterCreation::AttachCharacters();
     }
 }
 
@@ -206,10 +226,118 @@ void CCharacterCreation::SetCharCustomizeModel(const char* modelName) {
 void CCharacterCreation::SetCharacterFacing(float facing) {
     CCharacterCreation::m_charFacing = facing;
 
+    // Custom: with an altered form preview, the front model turns and the back one keeps facing forward
+    C3Vector position(0.0f, 0.0f, 0.0f);
+    bool alteredFront = CCharacterCreation::m_alteredCharacter && CCharacterCreation::m_alteredFormAtFront;
+
     if (CCharacterCreation::m_character->m_data.m_model) {
-        C3Vector position(0.0f, 0.0f, 0.0f);
-        CCharacterCreation::m_character->m_data.m_model->SetWorldTransform(position, facing, 1.0f);
+        CCharacterCreation::m_character->m_data.m_model->SetWorldTransform(position, alteredFront ? 0.0f : facing, 1.0f);
     }
+
+    if (CCharacterCreation::m_alteredCharacter && CCharacterCreation::m_alteredCharacter->m_data.m_model) {
+        CCharacterCreation::m_alteredCharacter->m_data.m_model->SetWorldTransform(position, alteredFront ? facing : 0.0f, 1.0f);
+    }
+}
+
+// Custom: attaches the character (and the altered form preview) to the background model: the front one at attachment
+// 0, the back one at attachment 1, like Cataclysm's Worgen/Human character creation
+void CCharacterCreation::AttachCharacters() {
+    CM2Model* background = CCharacterCreation::m_charCustomizeFrame ? CCharacterCreation::m_charCustomizeFrame->m_model : nullptr;
+
+    if (!background) {
+        return;
+    }
+
+    CM2Model* character = CCharacterCreation::m_character ? CCharacterCreation::m_character->m_data.m_model : nullptr;
+    CM2Model* altered = CCharacterCreation::m_alteredCharacter ? CCharacterCreation::m_alteredCharacter->m_data.m_model : nullptr;
+
+    if (!altered) {
+        CCharacterCreation::m_alteredFormAtFront = 0;
+    }
+
+    if (character) {
+        if (character->m_attachParent) {
+            character->DetachFromParent();
+        }
+
+        character->AttachToParent(background, CCharacterCreation::m_alteredFormAtFront != 0, nullptr, 0);
+    }
+
+    if (altered) {
+        if (altered->m_attachParent) {
+            altered->DetachFromParent();
+        }
+
+        altered->AttachToParent(background, CCharacterCreation::m_alteredFormAtFront == 0, nullptr, 0);
+    }
+
+    CCharacterCreation::SetCharacterFacing(CCharacterCreation::m_charFacing);
+}
+
+// Custom: builds (or drops) the altered form preview for the current character's race and sex
+void CCharacterCreation::CreateAlteredCharacter() {
+    if (CCharacterCreation::m_alteredCharacter) {
+        if (CCharacterCreation::m_alteredCharacter->m_data.m_model->m_attachParent) {
+            CCharacterCreation::m_alteredCharacter->m_data.m_model->DetachFromParent();
+        }
+
+        CCharacterComponent::FreeComponent(CCharacterCreation::m_alteredCharacter);
+        CCharacterCreation::m_alteredCharacter = nullptr;
+    }
+
+    if (!CCharacterCreation::m_character || !CCharacterCreation::m_charCustomizeFrame) {
+        return;
+    }
+
+    const CharacterPreferences& prefs = CCharacterCreation::m_character->m_data.m_preferences;
+    uint32_t alteredRace = ClientGetAlteredFormRace(prefs.m_raceID);
+    CreatureModelDataRec* modelRec = alteredRace ? GetModelDataRec(alteredRace, prefs.m_sexID) : nullptr;
+
+    if (!modelRec || !*modelRec->m_modelName) {
+        return;
+    }
+
+    ComponentData data;
+    data.SetPreferences(&prefs);
+    data.m_preferences.m_raceID = alteredRace;
+    data.m_model = CCharacterCreation::m_charCustomizeFrame->GetScene()->CreateModel(modelRec->m_modelName, 0);
+
+    if (!data.m_model) {
+        return;
+    }
+
+    data.m_model->m_lightingCallback = &CCharacterSelection::GenericLightingCallback;
+    data.m_model->m_lightingArg = CCharacterCreation::m_charCustomizeFrame->m_lightArray2;
+    data.m_model->SetBoneSequence(0xFFFFFFFF, 0, 0, 0, 1.0f, 1, 1);
+    data.m_flags |= 0x2;
+    CCharacterComponent::ValidateComponentData(&data, COMPONENT_CONTEXT_0);
+
+    CCharacterCreation::m_alteredCharacter = CCharacterComponent::AllocComponent();
+    CCharacterCreation::m_alteredCharacter->Init(&data, nullptr);
+    CCharacterCreation::DressComponent(CCharacterCreation::m_alteredCharacter);
+    CCharacterCreation::m_alteredCharacter->RenderPrep(0);
+}
+
+// Custom: copies the current choices onto the altered form preview
+void CCharacterCreation::SyncAlteredCharacter() {
+    if (!CCharacterCreation::m_character || !CCharacterCreation::m_alteredCharacter) {
+        return;
+    }
+
+    CCharacterCreation::m_character->CopyChoicesToComponent(CCharacterCreation::m_alteredCharacter, COMPONENT_CONTEXT_0);
+    CCharacterCreation::m_alteredCharacter->RenderPrep(0);
+}
+
+// Custom: swaps which form stands at the front
+void CCharacterCreation::SetViewingAlteredForm(int32_t alteredForm) {
+    alteredForm = alteredForm && CCharacterCreation::m_alteredCharacter ? 1 : 0;
+
+    if (alteredForm == CCharacterCreation::m_alteredFormAtFront) {
+        return;
+    }
+
+    CCharacterCreation::m_alteredFormAtFront = alteredForm;
+    CCharacterCreation::AttachCharacters();
 }
 
 // VERIFY: 308d1147 auto
@@ -240,6 +368,7 @@ void CCharacterCreation::CycleCharCustomization(CHAR_CUSTOMIZATION_TYPE type, in
             }
 
             CCharacterCreation::m_prevSkinIndex = CCharacterCreation::m_character->m_data.m_preferences.m_skinID;
+            CCharacterCreation::SyncAlteredCharacter(); // Custom: the altered form preview follows the choices
             CGlueLoading::StartLoad(CCharacterCreation::m_character, 1);
             return;
         }
@@ -289,6 +418,7 @@ void CCharacterCreation::CycleCharCustomization(CHAR_CUSTOMIZATION_TYPE type, in
         }
     }
 
+    CCharacterCreation::SyncAlteredCharacter(); // Custom: the altered form preview follows the choices
     CGlueLoading::StartLoad(CCharacterCreation::m_character, 1);
 }
 
@@ -309,7 +439,8 @@ void CCharacterCreation::CreateCharacter(const char* name) {
         guid = display->m_characterInfo.m_guid;
 
         if (name) {
-            if (!SStrCmpI(display->m_characterInfo.m_name, name, STORM_MAX_STR)) {
+            // Custom: case-sensitive, so a case-only change counts as a new name
+            if (!SStrCmp(display->m_characterInfo.m_name, name, STORM_MAX_STR)) {
                 validate = false;
             }
         } else {
@@ -413,9 +544,19 @@ int32_t CCharacterCreation::GetRandomClassID() {
     return classes[static_cast<uint32_t>((static_cast<uint64_t>(count) * CRandom::uint32_(g_rndSeed)) >> 32)];
 }
 
+// Custom: dresses the character and the altered form preview the same way (the body below is the original Dress,
+// working on `component`; the starting outfit is still chosen by the character's own race)
+void CCharacterCreation::Dress() {
+    CCharacterCreation::DressComponent(CCharacterCreation::m_character);
+
+    if (CCharacterCreation::m_alteredCharacter) {
+        CCharacterCreation::DressComponent(CCharacterCreation::m_alteredCharacter);
+    }
+}
+
 // VERIFY: b15e5451 auto
 // OFFSET: 0x004E0FD0
-void CCharacterCreation::Dress() {
+void CCharacterCreation::DressComponent(CCharacterComponent* component) {
     if (CCharacterCreation::m_existingCharacterIndex >= 0) {
         CharacterSelectionDisplay* display = CCharacterSelection::GetCharacterDisplay(CCharacterCreation::m_existingCharacterIndex);
 
@@ -445,9 +586,9 @@ void CCharacterCreation::Dress() {
                 int32_t visual = found && g_itemVisualsDB.GetRecord(itemRec.m_itemVisual) ? 0 : itemVisual;
 
                 if (slot != INVSLOT_MAINHAND && slot != INVSLOT_OFFHAND && slot != INVSLOT_RANGED) {
-                    CCharacterCreation::m_character->AddItemBySlot(static_cast<INVENTORY_SLOTS>(slot), displayID, visual);
+                    component->AddItemBySlot(static_cast<INVENTORY_SLOTS>(slot), displayID, visual);
                 } else if (found) {
-                    CCharacterComponent::AddHandItem(CCharacterCreation::m_character->m_data.m_model, &itemRec, static_cast<INVENTORY_SLOTS>(slot), SHEATHE_NONE, false, display->m_characterInfo.m_inventoryItemType[slot] == INVTYPE_SHIELD, false, visual);
+                    CCharacterComponent::AddHandItem(component->m_data.m_model, &itemRec, static_cast<INVENTORY_SLOTS>(slot), SHEATHE_NONE, false, display->m_characterInfo.m_inventoryItemType[slot] == INVTYPE_SHIELD, false, visual);
                 }
 
                 if (slot == INVSLOT_TABARD && found && (itemRec.m_flags & 0x1)) {
@@ -458,7 +599,7 @@ void CCharacterCreation::Dress() {
                     int32_t background;
 
                     if (GuildGetGuildTabard(display->m_characterInfo.m_guid, display->m_characterInfo.m_guildID, nullptr, nullptr, emblemStyle, emblemColor, borderStyle, borderColor, background)) {
-                        CCharacterCreation::m_character->ApplyGuildColor(emblemStyle, emblemColor, borderStyle, borderColor, background);
+                        component->ApplyGuildColor(emblemStyle, emblemColor, borderStyle, borderColor, background);
                     }
                 }
             }
@@ -468,13 +609,13 @@ void CCharacterCreation::Dress() {
     }
 
     for (uint32_t i = 0; i < NUM_ITEM_SLOTS; i++) {
-        CCharacterCreation::m_character->RemoveItem(static_cast<ITEM_SLOT>(i));
+        component->RemoveItem(static_cast<ITEM_SLOT>(i));
     }
 
-    CCharacterComponent::RemoveHandItem(CCharacterCreation::m_character->m_data.m_model, INVSLOT_MAINHAND, SHEATHE_NONE, false);
-    CCharacterComponent::RemoveHandItem(CCharacterCreation::m_character->m_data.m_model, INVSLOT_OFFHAND, SHEATHE_NONE, false);
-    CCharacterComponent::RemoveHandItem(CCharacterCreation::m_character->m_data.m_model, INVSLOT_OFFHAND, SHEATHE_NONE, true);
-    CCharacterComponent::RemoveHandItem(CCharacterCreation::m_character->m_data.m_model, INVSLOT_RANGED, SHEATHE_NONE, false);
+    CCharacterComponent::RemoveHandItem(component->m_data.m_model, INVSLOT_MAINHAND, SHEATHE_NONE, false);
+    CCharacterComponent::RemoveHandItem(component->m_data.m_model, INVSLOT_OFFHAND, SHEATHE_NONE, false);
+    CCharacterComponent::RemoveHandItem(component->m_data.m_model, INVSLOT_OFFHAND, SHEATHE_NONE, true);
+    CCharacterComponent::RemoveHandItem(component->m_data.m_model, INVSLOT_RANGED, SHEATHE_NONE, false);
 
     for (int32_t i = 0; i < g_charStartOutfitDB.m_numRecords; i++) {
         CharStartOutfitRec* outfit = i >= 0 && i < g_charStartOutfitDB.m_numRecords ? &g_charStartOutfitDB.m_records[i] : nullptr;
@@ -506,10 +647,10 @@ void CCharacterCreation::Dress() {
                         ItemDisplayInfoRec itemRec;
 
                         if (g_itemDisplayInfoDB.GetRecord(displayID, &itemRec)) {
-                            GEOCOMPONENTLINKS link = CCharacterComponent::AddHandItem(CCharacterCreation::m_character->m_data.m_model, &itemRec, INVSLOT_RANGED, SHEATHE_NONE, false, false, mainHand, 0);
+                            GEOCOMPONENTLINKS link = CCharacterComponent::AddHandItem(component->m_data.m_model, &itemRec, INVSLOT_RANGED, SHEATHE_NONE, false, false, mainHand, 0);
 
                             if (type == INVTYPE_RANGED) {
-                                for (CM2Model* attached = CCharacterCreation::m_character->m_data.m_model->m_attachList; attached; attached = attached->m_attachNext) {
+                                for (CM2Model* attached = component->m_data.m_model->m_attachList; attached; attached = attached->m_attachNext) {
                                     if (attached->m_attachmentId == static_cast<uint32_t>(link)) {
                                         attached->SetLoadedCallback(&CCharacterSelection::ModelLoadedCallback, nullptr);
                                         break;
@@ -525,7 +666,7 @@ void CCharacterCreation::Dress() {
                         ItemDisplayInfoRec itemRec;
 
                         if (g_itemDisplayInfoDB.GetRecord(displayID, &itemRec) && *itemRec.m_modelName[0]) {
-                            CCharacterCreation::m_character->AddItem(ITEMSLOT_11, &itemRec, 0);
+                            component->AddItem(ITEMSLOT_11, &itemRec, 0);
                         }
 
                         break;
@@ -537,7 +678,7 @@ void CCharacterCreation::Dress() {
                 }
             }
 
-            CCharacterCreation::m_character->AddItemByType(static_cast<INVENTORY_TYPES>(type), displayID);
+            component->AddItemByType(static_cast<INVENTORY_TYPES>(type), displayID);
         }
 
         return;
@@ -590,12 +731,16 @@ void CCharacterCreation::InitCharacterComponents(ComponentData* data, bool rando
     CCharacterCreation::m_prevHairStyleIndex = CCharacterCreation::m_character->m_data.m_preferences.m_hairStyleId;
     CCharacterCreation::m_prevFacialHairIndex = CCharacterCreation::m_character->m_data.m_preferences.m_facialHairId;
 
+    // Custom: (re)build the altered form preview for this race and sex before dressing, so both get dressed
+    CCharacterCreation::CreateAlteredCharacter();
+
     CCharacterCreation::SetCharacterFacing(CCharacterCreation::m_charFacing);
     CCharacterCreation::Dress();
     CCharacterCreation::m_character->RenderPrep(0);
 
     if (CCharacterCreation::m_charCustomizeFrame->m_model) {
-        CCharacterCreation::m_character->m_data.m_model->AttachToParent(CCharacterCreation::m_charCustomizeFrame->m_model, 0, nullptr, 0);
+        // Custom: attaches the altered form preview as well
+        CCharacterCreation::AttachCharacters();
     }
 }
 
@@ -636,6 +781,7 @@ void CCharacterCreation::SetSelectedSex(uint32_t sexID) {
             CCharacterCreation::InitCharacterComponents(&data, false);
 
             CCharacterCreation::m_nameGen.LoadNames(CCharacterCreation::m_races.m_data[CCharacterCreation::m_raceIndex], sexID);
+            CCharacterCreation::SyncAlteredCharacter(); // Custom: the altered form preview follows the choices
             CGlueLoading::StartLoad(CCharacterCreation::m_character, 1);
             return;
         }
@@ -658,6 +804,7 @@ void CCharacterCreation::SetSelectedSex(uint32_t sexID) {
     }
 
     CCharacterCreation::m_nameGen.LoadNames(CCharacterCreation::m_races.m_data[CCharacterCreation::m_raceIndex], sexID);
+    CCharacterCreation::SyncAlteredCharacter(); // Custom: the altered form preview follows the choices
     CGlueLoading::StartLoad(CCharacterCreation::m_character, 1);
 }
 
@@ -682,6 +829,7 @@ void CCharacterCreation::SetSelectedClass(int32_t classID) {
     CCharacterComponent::ValidateComponentData(&data, COMPONENT_CONTEXT_0);
     CCharacterCreation::InitCharacterComponents(&data, false);
     CCharacterCreation::Dress();
+    CCharacterCreation::SyncAlteredCharacter(); // Custom: the altered form preview follows the choices
     CGlueLoading::StartLoad(CCharacterCreation::m_character, 1);
 }
 
@@ -701,6 +849,7 @@ void CCharacterCreation::RandomizeCharCustomization() {
     CCharacterCreation::m_prevFacialHairIndex = CCharacterCreation::m_character->m_data.m_preferences.m_facialHairId;
 
     CCharacterCreation::Dress();
+    CCharacterCreation::SyncAlteredCharacter(); // Custom: the altered form preview follows the choices
     CGlueLoading::StartLoad(CCharacterCreation::m_character, 1);
 }
 
@@ -760,6 +909,7 @@ void CCharacterCreation::ResetCharCustomizeInfo() {
     }
 
     CCharacterCreation::m_nameGen.LoadNames(CCharacterCreation::m_character->m_data.m_preferences.m_raceID, CCharacterCreation::m_character->m_data.m_preferences.m_sexID);
+    CCharacterCreation::SyncAlteredCharacter(); // Custom: the altered form preview follows the choices
     CGlueLoading::StartLoad(CCharacterCreation::m_character, 1);
 }
 
@@ -831,6 +981,7 @@ void CCharacterCreation::SetSelectedRace(uint32_t raceIndex) {
 
     CCharacterCreation::m_nameGen.LoadNames(CCharacterCreation::m_races.m_data[CCharacterCreation::m_raceIndex], CCharacterCreation::m_character->m_data.m_preferences.m_sexID);
     CCharacterCreation::Dress();
+    CCharacterCreation::SyncAlteredCharacter(); // Custom: the altered form preview follows the choices
     CGlueLoading::StartLoad(CCharacterCreation::m_character, 1);
 }
 
@@ -868,5 +1019,6 @@ void CCharacterCreation::SetToExistingCharacter(uint32_t index) {
     }
 
     CCharacterCreation::m_nameGen.LoadNames(CCharacterCreation::m_character->m_data.m_preferences.m_raceID, CCharacterCreation::m_character->m_data.m_preferences.m_sexID);
+    CCharacterCreation::SyncAlteredCharacter(); // Custom: the altered form preview follows the choices
     CGlueLoading::StartLoad(CCharacterCreation::m_character, 1);
 }

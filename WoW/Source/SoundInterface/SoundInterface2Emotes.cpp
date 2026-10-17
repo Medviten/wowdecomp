@@ -27,7 +27,7 @@ TEXTEMOTELOOKUP::TEXTEMOTELOOKUP() {
 int32_t SI2::GetTextEmoteSoundID(uint32_t emotesTextId, uint32_t race, uint32_t sex) {
     TEXTEMOTELOOKUP* lookup;
 
-    if (emotesTextId < s_textEmoteLookupById.Count() && (lookup = s_textEmoteLookupById[emotesTextId]) != nullptr && race < 22 && sex < 2) {
+    if (emotesTextId < s_textEmoteLookupById.Count() && (lookup = s_textEmoteLookupById[emotesTextId]) != nullptr && race < TEXTEMOTELOOKUP::NUM_RACES && sex < 2) {
         return lookup->m_soundIds[race][sex];
     }
 
@@ -40,7 +40,7 @@ int32_t SI2::GetTextEmoteSoundIndex(uint32_t emotesTextId, uint32_t race, uint32
     TEXTEMOTELOOKUP* lookup;
     int32_t soundKitId;
 
-    if (emotesTextId < s_textEmoteLookupById.Count() && (lookup = s_textEmoteLookupById[emotesTextId]) != nullptr && race < 22 && sex < 2) {
+    if (emotesTextId < s_textEmoteLookupById.Count() && (lookup = s_textEmoteLookupById[emotesTextId]) != nullptr && race < TEXTEMOTELOOKUP::NUM_RACES && sex < 2) {
         soundKitId = lookup->m_soundIds[race][sex];
     } else {
         soundKitId = 0;
@@ -81,6 +81,12 @@ void SI2::InitEmoteSounds() {
 
     s_numTextEmotes = count;
 
+    // Custom: s_textEmoteLookupById keeps pointers into s_textEmoteLookups, so it must never reallocate while it is
+    // filled, or those pointers dangle and later writes land in freed heap memory. Reserve the most New() calls the loop
+    // can make: one per distinct emote ID, which is at most min(sound records, ID slots), even for an unsorted DBC.
+    uint32_t maxLookups = s_textEmoteLookupById.Count() < static_cast<uint32_t>(g_emotesTextSoundDB.m_numRecords) ? s_textEmoteLookupById.Count() : static_cast<uint32_t>(g_emotesTextSoundDB.m_numRecords);
+    s_textEmoteLookups.Reserve(maxLookups, 0);
+
     for (int32_t i = 0; i < g_emotesTextSoundDB.m_numRecords; i++) {
         EmotesTextSoundRec* rec = (i < 0 || i >= g_emotesTextSoundDB.m_numRecords) ? nullptr : &g_emotesTextSoundDB.m_records[i];
         uint32_t id = rec->m_emotesTextID;
@@ -96,7 +102,7 @@ void SI2::InitEmoteSounds() {
             (*slot)->m_emotesTextId = rec->m_emotesTextID;
         }
 
-        if (static_cast<uint32_t>(rec->m_raceID) < 22 && static_cast<uint32_t>(rec->m_sexID) < 2) {
+        if (static_cast<uint32_t>(rec->m_raceID) < TEXTEMOTELOOKUP::NUM_RACES && static_cast<uint32_t>(rec->m_sexID) < 2) {
             (*slot)->m_soundIds[rec->m_raceID][rec->m_sexID] = rec->m_soundID;
         }
     }

@@ -529,13 +529,24 @@ DBCache<NameCache, uint64_t, CHashKeyGUID>::REVERSEENTRY* DBCache<NameCache, uin
     uint32_t hashval = SStrHashHT(name);
     TSExplicitList<REVERSEENTRY>& list = this->m_reverse.m_slotlistarray[hashval & this->m_reverse.m_slotmask];
 
+    // Custom: character names are case-sensitive, so an exact match wins over a case-insensitive one
+    REVERSEENTRY* caseless = nullptr;
+
     for (REVERSEENTRY* entry = list.Head(); entry; entry = list.Next(entry)) {
-        if (entry->m_hashval == hashval && (entry->m_key.m_str == name || !SStrCmpUTF8I(entry->m_key.m_str, name, STORM_MAX_STR))) {
+        if (entry->m_hashval != hashval) {
+            continue;
+        }
+
+        if (entry->m_key.m_str == name || !SStrCmp(entry->m_key.m_str, name, STORM_MAX_STR)) {
             return entry;
+        }
+
+        if (!caseless && !SStrCmpUTF8I(entry->m_key.m_str, name, STORM_MAX_STR)) {
+            caseless = entry;
         }
     }
 
-    return nullptr;
+    return caseless;
 }
 
 // VERIFY: 4c9eb627 auto
@@ -591,7 +602,10 @@ void DBCache<NameCache, uint64_t, CHashKeyGUID>::RemoveReverseEntry(const char* 
 // OFFSET: 0x00680C20
 template <>
 void DBCache<NameCache, uint64_t, CHashKeyGUID>::ItemAdded(NameCache* item) {
-    if (this->FindReverseEntry(item->m_name)) {
+    // Custom: only skip on an exact-case duplicate, so "Bob" and "BOB" each get an entry
+    REVERSEENTRY* existing = this->FindReverseEntry(item->m_name);
+
+    if (existing && !SStrCmp(existing->m_key.m_str, item->m_name, STORM_MAX_STR)) {
         return;
     }
 
