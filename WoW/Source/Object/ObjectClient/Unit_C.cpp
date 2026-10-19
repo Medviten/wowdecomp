@@ -1016,11 +1016,8 @@ int32_t CGUnit_C::IsDeadOrAttachmentDying() {
 // VERIFY: 87f21e3d manual
 // OFFSET: 0x0072A480
 int32_t CGUnit_C::DisplayInfoNeedsUpdate() {
-    int32_t displayId = this->m_displayId;
-
-    if (!displayId || this->m_unit->m_unitFieldNativedisplayid != this->m_unit->m_unitFieldDisplayid) {
-        displayId = this->m_unit->m_unitFieldDisplayid;
-    }
+    // Custom: resolve through GetLocalDisplayID so the altered form aura can swap the native display
+    int32_t displayId = this->GetLocalDisplayID();
 
     CreatureDisplayInfoRec* displayInfo = g_creatureDisplayInfoDB.GetRecord(displayId);
 
@@ -6981,11 +6978,8 @@ int32_t CGUnit_C::FindDefaultAnimForTier(int32_t tier, uint32_t* anim) const {
 // VERIFY: 272cc5b1 manual
 // OFFSET: 0x00717A20
 CreatureModelDataRec* CGUnit_C::GetModelData() const {
-    int32_t displayId = this->m_displayId;
-
-    if (!displayId || this->m_unit->m_unitFieldNativedisplayid != this->m_unit->m_unitFieldDisplayid) {
-        displayId = this->m_unit->m_unitFieldDisplayid;
-    }
+    // Custom: resolve through GetLocalDisplayID so the altered form aura can swap the native display
+    int32_t displayId = this->GetLocalDisplayID();
 
     CreatureDisplayInfoRec* displayInfo = g_creatureDisplayInfoDB.GetRecord(displayId);
 
@@ -7213,11 +7207,7 @@ bool CGUnit_C::IsInAlteredForm() const {
         return false;
     }
 
-    int32_t displayId = this->m_displayId;
-
-    if (!displayId || this->m_unit->m_unitFieldNativedisplayid != this->m_unit->m_unitFieldDisplayid) {
-        displayId = this->m_unit->m_unitFieldDisplayid;
-    }
+    int32_t displayId = this->GetLocalDisplayID();
 
     if (!displayId || displayId == static_cast<int32_t>(this->m_unit->m_unitFieldNativedisplayid)) {
         return false;
@@ -7232,6 +7222,46 @@ bool CGUnit_C::IsInAlteredForm() const {
     CreatureDisplayInfoRec* femaleRec = g_creatureDisplayInfoDB.GetRecord(alteredRec->m_femaleDisplayID);
 
     return displayRec && ((maleRec && displayRec->m_modelID == maleRec->m_modelID) || (femaleRec && displayRec->m_modelID == femaleRec->m_modelID));
+}
+
+// Custom: stands in for Cataclysm's aura 358, which does not fit the 320-bit aura effect mask. No 3.3.5 spell uses aura
+// 302 and AzerothCore applies it as a no-op, so a spell DBC edit is enough on the server. Unlike Cataclysm, where the
+// aura marks the native (Worgen) form, here it marks the altered form, so the native form stays the default.
+static const int32_t s_alteredFormAura = 302;
+
+// Custom: see Unit_C.h. Cataclysm 0x005B5070, keyed on s_alteredFormAura and alteredFormRaces instead of
+// m_currentClientRace(Flags)
+int32_t CGUnit_C::GetCurrentClientNativeDisplayID() const {
+    int32_t nativeId = this->m_unit->m_unitFieldNativedisplayid;
+
+    if (!(this->m_obj->m_type & TYPEMASK_PLAYER) || !this->HasAuraEffect(s_alteredFormAura)) {
+        return nativeId;
+    }
+
+    uint32_t altered = ClientGetAlteredFormRace(this->m_unit->m_unitFieldBytes0[0]);
+    ChrRacesRec* alteredRec = altered ? g_chrRacesDB.GetRecord(altered) : nullptr;
+
+    if (!alteredRec) {
+        return nativeId;
+    }
+
+    int32_t displayId = this->m_unit->m_unitFieldBytes0[2] ? alteredRec->m_femaleDisplayID : alteredRec->m_maleDisplayID;
+    return displayId ? displayId : nativeId;
+}
+
+// Custom: see Unit_C.h. Cataclysm 0x005BB8D0, keeping this client's m_displayId override
+int32_t CGUnit_C::GetLocalDisplayID() const {
+    int32_t displayId = this->m_displayId;
+
+    if (!displayId || this->m_unit->m_unitFieldNativedisplayid != this->m_unit->m_unitFieldDisplayid) {
+        displayId = this->m_unit->m_unitFieldDisplayid;
+    }
+
+    if (displayId == static_cast<int32_t>(this->m_unit->m_unitFieldNativedisplayid)) {
+        displayId = this->GetCurrentClientNativeDisplayID();
+    }
+
+    return displayId;
 }
 
 // VERIFY: 8b19ad28 manual
@@ -9754,11 +9784,8 @@ void CGUnit_C::OnCollideFalling() {
 // VERIFY: 8cfa7612 auto
 // OFFSET: 0x0072D940
 void CGUnit_C::RefreshDataPointers() {
-    int32_t displayId = this->m_displayId;
-
-    if (!displayId || this->m_unit->m_unitFieldNativedisplayid != this->m_unit->m_unitFieldDisplayid) {
-        displayId = this->m_unit->m_unitFieldDisplayid;
-    }
+    // Custom: resolve through GetLocalDisplayID so the altered form aura can swap the native display
+    int32_t displayId = this->GetLocalDisplayID();
 
     this->m_displayInfo = g_creatureDisplayInfoDB.GetRecord(displayId);
 
@@ -13615,8 +13642,14 @@ void CGUnit_C::OnAuraUpdate(CDataStore* msg, bool updateAll) {
     }
 
     this->m_clientFlags &= ~0x40000;
+    bool wasAltered = this->HasAuraEffect(s_alteredFormAura);
     this->UpdateAuraEffectMask();
     bool changed = false;
+
+    // Custom: the altered form aura changes the drawn display (Cataclysm's UpdateAlteredForm, without the transition)
+    if (wasAltered != this->HasAuraEffect(s_alteredFormAura) && this->m_worldModel) {
+        this->UpdateDisplayInfo(0);
+    }
 
     for (uint32_t i = 0; i < oldCount; i++) {
         if (!updated[i]) {
@@ -20893,11 +20926,8 @@ void CGUnit_C::CreateOrDestroyObjectEffectManager() {
     int32_t displayId = this->m_mountDisplayId;
 
     if (!displayId) {
-        displayId = this->m_displayId;
-
-        if (!displayId || this->m_unit->m_unitFieldNativedisplayid != this->m_unit->m_unitFieldDisplayid) {
-            displayId = this->m_unit->m_unitFieldDisplayid;
-        }
+        // Custom: resolve through GetLocalDisplayID so the altered form aura can swap the native display
+        displayId = this->GetLocalDisplayID();
     }
 
     CreatureDisplayInfoRec* displayInfo = g_creatureDisplayInfoDB.GetRecord(displayId);
