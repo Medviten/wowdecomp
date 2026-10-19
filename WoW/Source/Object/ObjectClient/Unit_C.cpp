@@ -7264,6 +7264,30 @@ int32_t CGUnit_C::GetLocalDisplayID() const {
     return displayId;
 }
 
+// Custom: see Unit_C.h. The client is not told why the aura went away, so a change while fighting (the aura breaks on
+// attack), casting, moving or mounted swaps instantly. The base anim is also overridden by any combat or movement anim
+// that follows, so a fight starting just after the swap cuts the transformation short as well.
+bool CGUnit_C::CanPlayAlteredFormTransition() {
+    if (!(this->m_obj->m_type & TYPEMASK_PLAYER) || this->IsDeadOrAttachmentDying()) {
+        return false;
+    }
+
+    if ((this->m_unit->m_unitFieldFlags & 0x80000) || this->IsInCombat()) {
+        return false;
+    }
+
+    if (this->m_castingSpellId || this->m_channelSpellId || this->m_unit->m_unitChannelSpell) {
+        return false;
+    }
+
+    if (this->m_mountDisplayId > 0 || this->m_vehiclePassenger) {
+        return false;
+    }
+
+    uint32_t moving = MOVEMENTFLAG_FORWARD | MOVEMENTFLAG_BACKWARD | MOVEMENTFLAG_STRAFE_LEFT | MOVEMENTFLAG_STRAFE_RIGHT | MOVEMENTFLAG_FALLING | MOVEMENTFLAG_SWIMMING | MOVEMENTFLAG_FLYING;
+    return !(this->m_movementData.m_flags & moving);
+}
+
 // VERIFY: 8b19ad28 manual
 // OFFSET: 0x00720AF0
 uint32_t CGUnit_C::GetVoiceSex() const {
@@ -13646,9 +13670,16 @@ void CGUnit_C::OnAuraUpdate(CDataStore* msg, bool updateAll) {
     this->UpdateAuraEffectMask();
     bool changed = false;
 
-    // Custom: the altered form aura changes the drawn display (Cataclysm's UpdateAlteredForm, without the transition)
+    // Custom: the altered form aura changes the drawn display (Cataclysm's UpdateAlteredForm). Returning to the native
+    // form by hand plays the post-swap half of Cataclysm's transformation on the native model. The first half
+    // (ToAltered) is not used: on the native model it hides the body and only fades in an overlay, meant to be drawn
+    // over the altered model while that plays its own ToAltered, which these human models do not have.
     if (wasAltered != this->HasAuraEffect(s_alteredFormAura) && this->m_worldModel) {
         this->UpdateDisplayInfo(0);
+
+        if (wasAltered && !updateAll && this->CanPlayAlteredFormTransition()) {
+            this->PlayBaseAnimation(ANIM_TO_ALTERED_POST_SWAP, 0);
+        }
     }
 
     for (uint32_t i = 0; i < oldCount; i++) {

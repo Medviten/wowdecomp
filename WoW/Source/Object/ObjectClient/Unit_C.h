@@ -588,6 +588,9 @@ class CGUnit_C : public CGObject_C, public CGUnit {
     // (s_alteredFormAura) is up; and the display actually drawn, which uses that in place of the native display.
     int32_t GetCurrentClientNativeDisplayID() const;
     int32_t GetLocalDisplayID() const;
+    // Custom: whether a change of altered form should play the transformation anim (a manual change out of combat),
+    // rather than swapping instantly
+    bool CanPlayAlteredFormTransition();
     uint32_t GetVoiceSex() const;
     bool IsShapeShifted() const;
     void PreemptivelyCancelShapeshift();
